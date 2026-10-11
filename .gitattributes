@@ -1,0 +1,16 @@
+# 行尾统一：默认 LF，但 Windows 批处理必须是 CRLF
+# （cmd 解析 LF-only 的 .bat 在 label / goto 上会出问题）
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制，别做行尾/编码转换
+*.mmdb binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.pyd binary

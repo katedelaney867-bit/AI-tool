@@ -1,0 +1,1739 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 小工具</title>
+<style>
+  :root{
+    --bg:#050a14;
+    --bg2:#0a1424;
+    --panel:#0c1524;
+    --panel2:#101c30;
+    --line:#1d2f4d;
+    --line2:#27405f;
+    --text:#e8eef8;
+    --dim:#8fa3c0;
+    --dim2:#647894;
+    --accent:#3b82f6;
+    --accent2:#60a5fa;
+    --accent-dim:#1d3d6b;
+    --ok:#34d399;
+    --warn:#fbbf24;
+    --bad:#f87171;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1100px 700px at 12% -10%, #12294a 0%, transparent 60%),
+      radial-gradient(900px 600px at 100% 0%, #0d2038 0%, transparent 55%),
+      linear-gradient(180deg,#050a14 0%,#070d1a 100%);
+    background-attachment:fixed;
+    color:var(--text);
+    font-family:"SimSun","宋体","NSimSun","Songti SC","STSong",serif;
+    font-size:18px;
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#1e3557;border-radius:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  .shell{display:flex;min-height:100vh}
+
+  /* ---------------- 左侧导航 ---------------- */
+  .side{
+    width:236px;flex:0 0 236px;
+    background:linear-gradient(180deg,#0a1424 0%,#070e1b 100%);
+    border-right:1px solid var(--line);
+    padding:26px 16px;
+    display:flex;flex-direction:column;gap:8px;
+    position:sticky;top:0;height:100vh;
+  }
+  .brand{padding:2px 10px 22px}
+  .brand h1{
+    margin:0;font-size:27px;letter-spacing:3px;font-weight:700;
+    background:linear-gradient(90deg,#bfdbfe,#60a5fa 60%,#3b82f6);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .brand p{margin:6px 0 0;color:var(--dim2);font-size:14px;letter-spacing:1px}
+  .nav-btn{
+    display:flex;align-items:center;gap:12px;
+    width:100%;padding:14px 16px;
+    background:transparent;border:1px solid transparent;border-radius:var(--radius);
+    color:var(--dim);cursor:pointer;text-align:left;font-size:20px;letter-spacing:2px;
+    transition:.16s;
+  }
+  .nav-btn:hover{background:#0e1c30;color:var(--text)}
+  .nav-btn.on{
+    background:linear-gradient(90deg,#132a4c,#0e1c30);
+    border-color:var(--line2);color:#dbeafe;
+    box-shadow:inset 3px 0 0 var(--accent);
+  }
+  .nav-btn .ico{font-size:19px;width:22px;text-align:center;opacity:.9}
+  .side-foot{margin-top:auto;padding-top:16px;border-top:1px solid var(--line)}
+  .side-foot .tiny{color:var(--dim2);font-size:13px;line-height:1.6;padding:0 6px 10px;word-break:break-all}
+
+  /* ---------------- 主区 ---------------- */
+  .main{flex:1;min-width:0;padding:34px 44px 80px;max-width:1360px}
+  .page{display:none;animation:fade .18s ease}
+  .page.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  .head{margin-bottom:26px}
+  .head h2{margin:0 0 6px;font-size:32px;letter-spacing:3px;font-weight:700}
+  .head p{margin:0;color:var(--dim);font-size:16px;letter-spacing:.5px}
+
+  .card{
+    background:linear-gradient(180deg,var(--panel) 0%,#0a1220 100%);
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:24px 26px;margin-bottom:20px;
+  }
+  .card h3{margin:0 0 18px;font-size:21px;letter-spacing:2px;font-weight:700;color:#cfe0f7}
+  .card h3 .sub{font-size:14px;color:var(--dim2);letter-spacing:0;margin-left:10px;font-weight:400}
+
+  .grid{display:grid;gap:18px}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  @media(max-width:1100px){.g2,.g3{grid-template-columns:1fr}}
+
+  label.f{display:block}
+  label.f > span{display:block;margin-bottom:8px;color:var(--dim);font-size:16px;letter-spacing:1px}
+  label.f > span em{color:var(--bad);font-style:normal;margin-left:4px}
+  input[type=text],input[type=password],input[type=number],select,textarea{
+    width:100%;padding:13px 15px;
+    background:#08111f;border:1px solid var(--line2);border-radius:10px;
+    font-size:18px;outline:none;transition:.15s;
+  }
+  input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.16);background:#0a1626}
+  input::placeholder,textarea::placeholder{color:#4d6182}
+  textarea{resize:vertical;line-height:1.7;min-height:120px}
+  select{cursor:pointer}
+  .hint{color:var(--dim2);font-size:14px;margin-top:7px;letter-spacing:.4px;line-height:1.6}
+
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:9px;
+    padding:13px 26px;border-radius:10px;border:1px solid var(--line2);
+    background:#101f36;color:#dbe7f8;cursor:pointer;font-size:18px;letter-spacing:2px;
+    transition:.15s;white-space:nowrap;
+  }
+  .btn:hover{background:#162944;border-color:#33517a}
+  .btn:disabled{opacity:.42;cursor:not-allowed}
+  .btn.primary{background:linear-gradient(180deg,#2f6fe0,#2358b8);border-color:#3f7de8;color:#fff}
+  .btn.primary:hover{background:linear-gradient(180deg,#3b80f2,#2a63c8)}
+  .btn.danger{border-color:#6b2b2b;color:#fca5a5;background:#1e1010}
+  .btn.danger:hover{background:#2a1616}
+  .btn.sm{padding:8px 16px;font-size:16px;letter-spacing:1px;border-radius:8px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .row.end{justify-content:flex-end}
+
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+  @media(max-width:1100px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{
+    background:#0a1424;border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px 20px;
+  }
+  .stat b{display:block;font-size:34px;letter-spacing:1px;color:#dbeafe;font-weight:700;line-height:1.25}
+  .stat span{color:var(--dim2);font-size:15px;letter-spacing:1px}
+
+  .dot{width:10px;height:10px;border-radius:50%;background:#3a4d68;display:inline-block}
+  .dot.run{background:var(--ok);box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}100%{box-shadow:0 0 0 12px rgba(52,211,153,0)}}
+
+  .log{
+    background:#060c16;border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;height:290px;overflow-y:auto;
+    font-family:Consolas,"Courier New",monospace;font-size:15px;line-height:1.75;
+    color:#9fb6d4;
+  }
+  .log div{white-space:pre-wrap;word-break:break-word}
+  .log .t{color:#4e6b93}
+  .log .ok{color:var(--ok)}
+  .log .warn{color:var(--warn)}
+  .log .bad{color:var(--bad)}
+
+  /* 注册进度：一个账号一张卡，并发高时也能一眼看出谁卡在哪一步。
+     点卡片才展开这个账号的文字日志。 */
+  .tasks{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  .task{
+    background:#0a1424;border:1px solid var(--line);border-radius:10px;
+    padding:12px 14px;cursor:pointer;transition:border-color .15s,background .15s;
+  }
+  .task:hover{border-color:#2f4a70;background:#0c192c}
+  .task.on{border-color:#3b82f6;background:#0d1e36}
+  .task .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .task .who{
+    font-size:15px;color:#dbeafe;font-weight:600;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .task .pct{font-size:14px;color:var(--dim2);font-variant-numeric:tabular-nums;flex:none}
+  .task .mail{
+    font-size:13px;color:#7f9cc0;margin-top:7px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .task .bar{height:6px;border-radius:99px;background:#12203a;margin-top:9px;overflow:hidden}
+  .task .bar > i{display:block;height:100%;width:0;border-radius:99px;background:#3b82f6;transition:width .3s ease}
+  .task.s-ok .bar > i{background:var(--ok)}
+  .task.s-bad .bar > i{background:var(--bad)}
+  .task.s-warn .bar > i{background:var(--warn)}
+  .task .say{
+    font-size:13px;color:#6f89ab;margin-top:8px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .task.s-bad .say{color:#c98b8b}
+
+  table{width:100%;border-collapse:collapse;font-size:16px}
+  th,td{padding:12px 10px;text-align:left;border-bottom:1px solid var(--line)}
+  th{color:var(--dim2);font-weight:400;font-size:15px;letter-spacing:1px;white-space:nowrap}
+  tbody tr:hover{background:#0d1a2c}
+  td.mail{font-family:Consolas,monospace;font-size:15px}
+  .tag{
+    display:inline-block;padding:2px 11px;border-radius:999px;
+    font-size:14px;letter-spacing:.5px;border:1px solid;
+  }
+  .tag.ok{color:#6ee7b7;border-color:#155e4a;background:#07231b}
+  .tag.bad{color:#fca5a5;border-color:#612626;background:#210d0d}
+  .tag.wait{color:#fcd34d;border-color:#5c4715;background:#211a06}
+  .tag.gray{color:#9fb0c8;border-color:#2b3d58;background:#101a29}
+  .q{font-size:22px;font-weight:700;color:#93c5fd}
+  .q.zero{color:#f87171}
+  .q.none{color:#5b6f8d;font-size:17px;font-weight:400}
+
+  .empty{color:var(--dim2);text-align:center;padding:36px 0;letter-spacing:1px}
+  .scroll-x{overflow-x:auto}
+
+  .modal{position:fixed;inset:0;background:rgba(3,7,14,.78);backdrop-filter:blur(3px);display:none;z-index:60;padding:40px 20px;overflow-y:auto}
+  .modal.on{display:block}
+  .modal .box{
+    max-width:920px;margin:0 auto;background:linear-gradient(180deg,#0c1524,#080f1b);
+    border:1px solid var(--line2);border-radius:16px;padding:30px 34px;
+  }
+  .modal .box h2{margin:0 0 4px;font-size:28px;letter-spacing:3px}
+  .modal .box .lead{color:var(--dim);margin:0 0 24px;font-size:16px}
+  /* 账号凭证弹窗（查看密码 / 2FA） */
+  .cred-line{display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .cred-k{flex:0 0 108px;color:var(--dim);font-size:15px;letter-spacing:1px}
+  .cred-v{flex:1 1 auto;min-width:0;word-break:break-all;font-family:ui-monospace,Consolas,monospace;font-size:16px;color:#dbe8fb}
+  .cred-v.none{color:var(--dim2);font-family:inherit}
+  #cred-code{font-size:24px;letter-spacing:4px;color:var(--accent);font-family:ui-monospace,Consolas,monospace}
+  .sec{border-top:1px solid var(--line);padding-top:22px;margin-top:22px}
+  .sec > h4{margin:0 0 16px;font-size:19px;letter-spacing:2px;color:#bcd2ee;font-weight:700}
+  .switch{display:flex;align-items:center;gap:12px;cursor:pointer;padding:9px 0;user-select:none}
+  .switch input{width:20px;height:20px;accent-color:var(--accent);cursor:pointer}
+  .switch span{color:#cfdcef;font-size:17px}
+
+  /* 高级设置折叠区：默认收起，小白看到的就只有代理 / 密钥 / 手机号验证。 */
+  details.adv{border-top:1px solid var(--line);padding-top:22px;margin-top:22px}
+  details.adv > summary{
+    cursor:pointer;list-style:none;font-size:17px;letter-spacing:1.5px;color:#9db4d4;
+    padding:4px 0;user-select:none;
+  }
+  details.adv > summary::-webkit-details-marker{display:none}
+  details.adv > summary::before{content:"▸ ";color:var(--accent)}
+  details.adv[open] > summary::before{content:"▾ "}
+  details.adv > summary:hover{color:#cfdcef}
+  details.adv .sec:first-of-type{border-top:0;padding-top:14px;margin-top:10px}
+
+  .toast{
+    position:fixed;left:50%;bottom:44px;transform:translate(-50%,26px);
+    background:#12203a;border:1px solid var(--line2);border-left:4px solid var(--accent);
+    padding:14px 26px;border-radius:10px;font-size:17px;letter-spacing:1px;
+    opacity:0;pointer-events:none;transition:.22s;z-index:99;max-width:78vw;
+    box-shadow:0 12px 40px rgba(0,0,0,.5);
+  }
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+  .toast.ok{border-left-color:var(--ok)}
+  .toast.bad{border-left-color:var(--bad)}
+
+  .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}
+  .shot{background:#08111f;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .shot img{width:100%;display:block;background:#060b14;cursor:zoom-in}
+  .shot .cap{padding:10px 12px;font-size:14px;color:var(--dim2);line-height:1.55}
+  .shot .cap b{color:#bcd2ee;font-weight:400;display:block;font-size:15px;margin-bottom:3px}
+  .big{position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:120;display:none;align-items:center;justify-content:center;cursor:zoom-out}
+  .big.on{display:flex}
+  .big img{max-width:94vw;max-height:92vh;border-radius:10px}
+  .pick{display:flex;align-items:center;gap:8px}
+  input[type=checkbox]{width:19px;height:19px;accent-color:var(--accent);cursor:pointer}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand">
+      <h1>AI 小工具</h1>
+      <p>注册 · 号池 · 生图</p>
+    </div>
+    <button class="nav-btn on" data-page="register"><span class="ico">◈</span>注册账号</button>
+    <button class="nav-btn" data-page="accounts"><span class="ico">▤</span>账号池</button>
+    <button class="nav-btn" data-page="image"><span class="ico">✦</span>测试生图</button>
+    <div class="side-foot">
+      <button class="nav-btn" id="btn-settings"><span class="ico">⚙</span>设置</button>
+      <div class="tiny" id="data-dir"></div>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- ===================== 注册账号 ===================== -->
+    <section class="page on" id="page-register">
+      <div class="head">
+        <h2>注册账号</h2>
+      </div>
+
+      <!-- ===================== 开始前检查 =====================
+           小白最怕的不是报错，是「不知道为什么不动」。实测最常卡住的就是这四件事：
+           密钥没填 / 余额不够 / 代理配错 / 浏览器内核没下完。
+           这四项不前置查出来，表现全是「点了开始注册，半天没反应」。
+           启动时自动跑快检（毫秒级），点「开始检查」才联网 + 真启动浏览器。 -->
+      <div class="card" id="pf-card">
+        <div class="row" style="justify-content:space-between;align-items:center;margin:0">
+          <div>
+            <b style="font-size:15px">开始前检查</b>
+            <div class="hint" style="margin:5px 0 0" id="pf-summary">正在检查…</div>
+          </div>
+          <div class="row" style="gap:8px;margin:0">
+            <button class="btn sm" id="btn-pf-kernel" type="button" style="display:none">下载内核</button>
+            <button class="btn sm" id="btn-pf-run" type="button">开始检查</button>
+          </div>
+        </div>
+        <div id="pf-list" style="margin-top:12px"></div>
+      </div>
+
+      <div class="card">
+        <div class="stats" style="margin-bottom:22px">
+          <div class="stat"><b id="st-state">空闲</b><span>当前状态</span></div>
+          <div class="stat"><b id="st-done">0 / 0</b><span>已完成 / 总数</span></div>
+          <div class="stat"><b id="st-success">0</b><span>注册成功</span></div>
+          <div class="stat"><b id="st-fail">0</b><span>失败</span></div>
+        </div>
+
+        <div class="grid g2">
+          <!-- 和「代理」那一格同款：给个显式保存按钮。
+               以前只能靠「开始注册」顺带落盘 —— 想先把密钥存好、稍后再跑注册的人没法单独保存。
+               用 div 不用 label：button 嵌在 label 里点一下会被当成「点标签」而聚焦输入框。 -->
+          <div class="f" style="grid-column:1/-1">
+            <span>工具密钥<em>*</em></span>
+            <div class="row" style="gap:8px;align-items:center;margin:0">
+              <input type="password" id="cf-remail_api_key" placeholder="粘贴你的工具密钥"
+                     style="flex:1;min-width:0">
+              <button class="btn sm" id="btn-save-key" type="button">保存密钥</button>
+            </div>
+            <div class="hint" id="hint-remail"></div>
+          </div>
+          <label class="f">
+            <span>注册数量</span>
+            <input type="number" id="cf-register_count" min="1" max="999" value="1">
+          </label>
+          <label class="f">
+            <span>并发数</span>
+            <input type="number" id="cf-concurrency" min="1" max="8" value="1">
+            <div class="hint">建议填 1，稳。填多了浏览器会同时开好几个，占内存也更容易被拦。</div>
+          </label>
+
+          <!-- 代理属于「每一轮注册都要用的出口」，跟手机号验证无关，所以独立一格、永远可见。
+               清空后必须能存下去，所以配了一个显式保存按钮。 -->
+          <div class="f" style="grid-column:1/-1">
+            <span>代理</span>
+            <div class="row" style="gap:8px;align-items:center;margin:0">
+              <input type="text" id="cf-reg_proxy" placeholder="https://用户名:密码@主机:端口"
+                     style="flex:1;min-width:0">
+              <button class="btn sm" id="btn-save-proxy" type="button">保存代理</button>
+              <button class="btn sm" id="btn-clear-proxy" type="button">清空</button>
+            </div>
+            <div class="hint" id="hint-proxy"></div>
+          </div>
+        </div>
+
+        <!-- 手机号验证是可选项：不勾 = 纯邮箱注册（账号只能生图）；勾了才过手机号。
+             号码和邮箱共用同一把「工具密钥」，所以勾上之后**不需要再填任何东西**
+             （以前这里会展开一个「号码密钥」输入框，那个字段已经删了）。 -->
+        <div class="row" style="margin-top:18px;align-items:center;gap:12px">
+          <label class="switch"><input type="checkbox" id="cf-reg_phone_verify"><span>注册后过手机号验证</span></label>
+          <span class="hint" style="margin:0" id="reg-phone-verify-hint">不勾选 = 只用邮箱注册，得到的账号可以用于生图，不能用于Codex</span>
+        </div>
+
+        <!-- 账号加固：注册后自动设密码 + 绑 2FA。
+             和「设置」弹窗里那个 cf-harden_after_register 是同一个值。 -->
+        <div class="row" style="margin-top:12px;align-items:center;gap:12px">
+          <label class="switch"><input type="checkbox" id="cf-reg_harden"><span>注册后设密码并绑 2FA</span></label>
+          <span class="hint" style="margin:0" id="reg-harden-hint">勾选后账号可凭邮箱+密码二次登录，不必再要验证码</span>
+        </div>
+
+        <div class="row" style="margin-top:24px">
+          <button class="btn primary" id="btn-start">开始注册</button>
+          <button class="btn danger" id="btn-stop" disabled>停止</button>
+          <span class="hint" id="reg-hint" style="margin:0"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>注册进度<span class="sub">并发跑多个账号时，每个账号一张卡；点卡片看它的文字日志</span></h3>
+        <div class="row" style="justify-content:space-between;margin:16px 0 12px">
+          <span class="hint" style="margin:0" id="reg-task-count"></span>
+        </div>
+        <div class="tasks" id="reg-tasks"><div class="empty" style="padding:18px 0">还没有任务</div></div>
+        <div id="reg-log-wrap" style="display:none;margin-top:14px">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px">
+            <b id="reg-log-title" style="color:#dbeafe;font-weight:600"></b>
+            <button class="btn sm" id="btn-reg-log-back">返回卡片</button>
+          </div>
+          <div class="log" id="reg-log"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 账号池 ===================== -->
+    <section class="page" id="page-accounts">
+      <div class="head">
+        <h2>账号池</h2>
+        <p>自己注册的、外面导入的，都放在这里。可以查生图额度、直接拿去用。</p>
+      </div>
+
+      <div class="card">
+        <div class="stats">
+          <div class="stat"><b id="ac-total">0</b><span>账号总数</span></div>
+          <div class="stat"><b id="ac-success">0</b><span>注册成功</span></div>
+          <div class="stat"><b id="ac-quota">0</b><span>可生图账号</span></div>
+          <div class="stat"><b id="ac-dead">0</b><span>已失效</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>导入账号<span class="sub">从别处拿到的号，粘进来就行</span></h3>
+        <label class="f">
+          <span>粘贴内容</span>
+          <textarea id="imp-text" rows="5" placeholder="支持：整段 session JSON（含 accessToken）、token 数组、或者光秃秃的一条 access_token。可以一次贴多个。"></textarea>
+          <div class="hint">导入后会自动读出邮箱、套餐、有效期；不联网。额度要另外点「查生图额度」。</div>
+        </label>
+        <div class="row" style="margin-top:16px">
+          <button class="btn primary" id="btn-import">解析并导入</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:18px">
+          <h3 style="margin:0">账号列表</h3>
+          <div class="row">
+            <button class="btn sm" id="btn-liveness">测活</button>
+            <button class="btn sm" id="btn-quota">查生图额度</button>
+            <button class="btn sm" id="btn-export">导出</button>
+            <select id="ex-format" style="width:auto" title="导出 / 交付格式">
+              <option value="sub2api-data">导出格式(sub2api)</option>
+              <option value="sub2api">导出格式(session)</option>
+              <option value="delivery">交付凭证包（txt：邮箱----密码----2FA密钥）</option>
+            </select>
+            <button class="btn sm danger" id="btn-del-failed">删除失效账号</button>
+            <button class="btn sm danger" id="btn-del">删除选中</button>
+            <button class="btn sm danger" id="btn-clear">全部清空</button>
+          </div>
+        </div>
+        <div class="scroll-x">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:44px"><input type="checkbox" id="chk-all"></th>
+                <th>邮箱</th><th>状态</th><th>接码</th><th>套餐</th><th>生图额度</th><th>有效期</th><th style="width:70px"></th>
+              </tr>
+            </thead>
+            <tbody id="ac-body"><tr><td colspan="8" class="empty">还没有账号</td></tr></tbody>
+          </table>
+        </div>
+        <div class="log" id="ac-log" style="height:150px;margin-top:18px"><div class="t">操作日志</div></div>
+      </div>
+    </section>
+
+    <!-- ===================== 测试生图 ===================== -->
+    <section class="page" id="page-image">
+      <div class="head">
+        <h2>测试生图</h2>
+        <p>选一个账号，写一句话，直接出图。</p>
+      </div>
+
+      <div class="card">
+        <div class="grid g2">
+          <label class="f">
+            <span>用哪个账号</span>
+            <select id="im-account"><option value="">— 还没有可用账号 —</option></select>
+            <div class="hint" id="im-account-hint"></div>
+          </label>
+          <label class="f">
+            <span>画面比例</span>
+            <select id="im-aspect">
+              <option value="">默认比例</option>
+              <option value="16:9">16:9 横图</option>
+              <option value="9:16">9:16 竖图</option>
+              <option value="4:3">4:3</option>
+              <option value="3:4">3:4</option>
+              <option value="1:1">1:1 方图</option>
+            </select>
+            <div class="hint">分辨率不可控，只能靠比例影响。</div>
+          </label>
+        </div>
+
+        <label class="f" style="margin-top:18px">
+          <span>提示词</span>
+          <textarea id="im-prompt" rows="4" placeholder="写你想生成的画面，例如：雨夜霓虹街头，电影感，16:9"></textarea>
+        </label>
+
+        <div class="row" style="margin-top:20px">
+          <button class="btn primary" id="btn-gen">开始生成</button>
+          <span class="hint" id="im-hint" style="margin:0"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>生成日志</h3>
+        <div class="log" id="im-log" style="height:170px"><div class="t">等待生成…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:18px">
+          <h3 style="margin:0">历史图片<span class="sub" id="im-dir"></span></h3>
+          <button class="btn sm" id="btn-refresh-shots">刷新</button>
+        </div>
+        <div class="shots" id="im-shots"><div class="empty" style="grid-column:1/-1">还没有生成过图片</div></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ===================== 账号凭证（查看密码 / 2FA） ===================== -->
+<!-- ↓ 复用 .modal / .box 的现成样式，所以这里不用写定位和背景。 -->
+<div class="modal" id="cred-modal">
+  <div class="box" style="max-width:760px">
+    <h2>账号凭证</h2>
+    <p class="lead" id="cred-mail">—</p>
+    <div id="cred-body"></div>
+    <div style="display:flex;gap:12px;margin-top:24px">
+      <button class="btn sm" id="btn-cred-copy">复制全部</button>
+      <button class="btn sm" id="btn-cred-close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 设置 ===================== -->
+<div class="modal" id="modal">
+  <div class="box">
+    <h2>设置</h2>
+
+    <div class="sec">
+      <h4>网络</h4>
+      <label class="f">
+        <span>代理地址</span>
+        <input type="text" id="cf-proxy" placeholder="http://127.0.0.1:7890">
+      </label>
+    </div>
+
+    <div class="sec">
+      <h4>本站号池</h4>
+      <div class="grid g2">
+        <label class="f" style="grid-column:1/-1">
+          <span>工具密钥</span>
+          <input type="password" id="cf-remail_api_key_2" placeholder="粘贴你的工具密钥">
+          <div class="hint" id="hint-remail-modal"></div>
+        </label>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h4>账号加固（可选）</h4>
+      <label class="switch"><input type="checkbox" id="cf-harden_after_register"><span>注册后给账号设置密码并绑定 2FA</span></label>
+    </div>
+
+    <div class="sec">
+      <h4>手机号验证（可选）</h4>
+      <label class="switch"><input type="checkbox" id="cf-enable_activation"><span>注册成功后自动过一遍手机号验证</span></label>
+      <div class="hint" style="margin-top:8px">
+        只生图不需要手机号验证，要用 Codex 才需要。和「注册账号」页那个开关是同一个值。
+      </div>
+    </div>
+
+    <!-- 以下都是「默认值就是最优」的东西。小白不需要看，
+         但出问题时想调也能调，所以折叠起来而不是删掉。 -->
+    <details class="adv">
+      <summary>高级设置（一般不用改）</summary>
+
+      <div class="sec">
+        <h4>超时</h4>
+        <div class="grid g3">
+          <label class="f">
+            <span>页面超时（秒）</span>
+            <input type="number" id="cf-page_load_timeout" min="30" max="300">
+          </label>
+          <label class="f">
+            <span>验证码等待（秒）</span>
+            <input type="number" id="cf-otp_timeout" min="30" max="600">
+          </label>
+          <label class="f">
+            <span>生图超时（秒）</span>
+            <input type="number" id="cf-image_timeout" min="60" max="900">
+          </label>
+          <label class="f">
+            <span>手机号验证超时（秒）</span>
+            <input type="number" id="cf-oauth_timeout" min="60" max="900">
+          </label>
+        </div>
+        <div class="hint">网络慢就往上调，别往小调。验证码等待是等邮箱/手机验证码的最长时间。</div>
+      </div>
+
+      <div class="sec">
+        <h4>查活</h4>
+        <div class="grid g2">
+          <label class="f">
+            <span>测活并发</span>
+            <input type="number" id="cf-liveness_concurrency" min="1" max="8">
+            <div class="hint">同时查几个账号。调大更快，但太大会更容易被上游风控。</div>
+          </label>
+          <label class="f">
+            <span>查活超时（秒）</span>
+            <input type="number" id="cf-liveness_timeout" min="5" max="120">
+          </label>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h4>行为开关</h4>
+        <label class="switch"><input type="checkbox" id="cf-headless"><span>后台运行浏览器（看不到窗口）</span></label>
+        <label class="switch"><input type="checkbox" id="cf-humanize"><span>拟人化操作（更像真人）</span></label>
+        <label class="switch"><input type="checkbox" id="cf-geoip"><span>按代理地区伪装时区/语言</span></label>
+        <label class="switch"><input type="checkbox" id="cf-liveness_check"><span>注册完自动查活</span></label>
+        <div class="hint" style="margin-top:8px">
+          拟人化、时区伪装都关掉会明显更容易被拦，没事别关。想看浏览器在干什么就取消「后台运行」。
+        </div>
+      </div>
+    </details>
+
+    <div class="row end" style="margin-top:28px">
+      <button class="btn" id="btn-close-settings">关闭</button>
+      <button class="btn primary" id="btn-save-settings">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="big" id="big"><img id="big-img" alt=""></div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ 基础 */
+const $ = (id) => document.getElementById(id);
+let CONFIG = {};
+
+function toast(msg, kind = "") {
+  const el = $("toast");
+  el.textContent = msg;
+  el.className = "toast on " + kind;
+  clearTimeout(el._t);
+  // 报错信息通常比较长，多留一会儿让人看完。
+  el._t = setTimeout(() => { el.className = "toast " + kind; }, kind === "bad" ? 9000 : 3200);
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: { "content-type": "application/json" },
+    ...options,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok) {
+    const detail = (data && data.detail) || ("HTTP " + res.status);
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return data || {};
+}
+
+function esc(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso).slice(0, 19);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/* 日志小工具：字符串和 {ts,level,message} 两种格式都吃 */
+function logLine(entry) {
+  const div = document.createElement("div");
+  if (typeof entry === "string") {
+    let cls = "";
+    if (entry.includes("失败") || entry.includes("错误")) cls = "bad";
+    else if (entry.includes("取消") || entry.includes("警")) cls = "warn";
+    div.innerHTML = `<span class="t">${esc(entry.slice(0, 10))}</span>${esc(entry.slice(10))}`;
+    if (cls) div.className = cls;
+    return div;
+  }
+  const level = entry.level === "error" ? "bad" : (entry.level === "warn" ? "warn" : "");
+  div.className = level;
+  div.textContent = `[${entry.ts || ""}] ${entry.message || ""}`;
+  return div;
+}
+
+function pushLogs(box, entries, keepFirst) {
+  if (!entries || !entries.length) return;
+  if (keepFirst && box.childElementCount === 1 && box.firstElementChild.className === "t") box.innerHTML = "";
+  for (const item of entries) box.appendChild(logLine(item));
+  while (box.childElementCount > 600) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+}
+
+/* ------------------------------------------------------------------ 导航 */
+document.querySelectorAll(".nav-btn[data-page]").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".nav-btn[data-page]").forEach((b) => b.classList.remove("on"));
+    document.querySelectorAll(".page").forEach((p) => p.classList.remove("on"));
+    btn.classList.add("on");
+    $("page-" + btn.dataset.page).classList.add("on");
+    if (btn.dataset.page === "accounts") loadAccounts();
+    if (btn.dataset.page === "image") { loadAccounts().then(loadAccountOptions); loadShots(); }
+  };
+});
+
+/* ------------------------------------------------------------------ 配置 */
+// 只列「面板上真有输入框」的字段：拿不到元素的一律跳过，所以这里少写不会误伤配置。
+// 面板上已经没有的（Remail 接口地址 / 取号模式 / 库存策略 / 项目关键词 / 后缀 / 接码平台…）
+// 仍然存在于 config.json 里，只是不再从界面改写。
+const CFG_TEXT = ["proxy"];
+const CFG_NUM = ["register_count", "concurrency", "page_load_timeout", "liveness_timeout",
+                 "liveness_concurrency",
+                 "otp_timeout", "image_timeout", "oauth_timeout"];
+const CFG_BOOL = ["headless", "humanize", "geoip", "liveness_check", "enable_activation", "harden_after_register"];
+// 注册页那个工具密钥输入框不在这里：它按当前来源落到 sitepool_tool_key 或 remail_api_key，
+// 由 persistRegisterFields / keyConfigField 处理。放进来反而会不分来源地写死 remail_api_key。
+// 界面上已经没有需要单独处理的密钥输入框了。CloakBrowser 授权码去掉了：
+// 它只对 CloakBrowser Pro 二进制有意义，免费档不需要，实测全程留空照样跑。
+// 配置键 cloak_license_key 仍保留，真要 Pro 版就写进 config.json。
+const CFG_SECRET = [];
+
+async function loadConfig() {
+  const data = await api("/api/config");
+  CONFIG = data.config || {};
+  for (const key of CFG_TEXT) { const el = $("cf-" + key); if (el && el.tagName !== "SELECT") el.value = CONFIG[key] ?? ""; }
+  for (const key of CFG_NUM) { const el = $("cf-" + key); if (el) el.value = CONFIG[key] ?? 0; }
+  for (const key of CFG_BOOL) { const el = $("cf-" + key); if (el) el.checked = !!CONFIG[key]; }
+  for (const key of CFG_SECRET) {
+    const el = $("cf-" + key);
+    if (el) { el.value = ""; el.placeholder = CONFIG[key + "_mask"] ? ("已保存：" + CONFIG[key + "_mask"]) : "未设置"; }
+  }
+  // 设置弹窗里那个 Key 是同一个值的第二入口，得单独处理（也按来源取打码值）。
+  // ★ 和注册页同款：输入框 placeholder 固定，已保存的值只出现在下面那行提示里
+  //   （以前是把打码值塞进 placeholder，看着像已经填好了、其实是个空框）。
+  $("cf-remail_api_key_2").placeholder = "粘贴你的工具密钥";
+  renderKeyHintModal();
+  $("cf-remail_api_key").placeholder = "粘贴你的工具密钥";
+  renderKeyHint();
+  $("cf-reg_proxy").value = CONFIG.proxy || "";
+  renderProxyHint();
+
+  // 手机号验证开关：它就是 enable_activation，跟设置弹窗里那个是同一个值。
+  $("cf-reg_phone_verify").checked = !!CONFIG.enable_activation;
+  syncRegPhoneVerify();
+
+  // 账号加固开关：就是 harden_after_register，跟设置弹窗里那个是同一个值。
+  $("cf-reg_harden").checked = !!CONFIG.harden_after_register;
+  syncRegHarden();
+}
+
+/** 注册页那个「注册后设密码并绑 2FA」开关的联动提示。 */
+function syncRegHarden() {
+  const on = $("cf-reg_harden").checked;
+  const el = $("reg-harden-hint");
+  if (!el) return;
+  el.textContent = on
+    ? "每个号会多花约 30~60 秒；设好后密码和2FA验证码即可登录"
+    : "不勾选 = 账号没有密码，二次登录需要再取一次邮箱验证码";
+}
+
+/** 当前邮箱来源：sitepool（本站号池）或 remail（直连上游）。 */
+function mailboxProvider() {
+  return String((CONFIG && CONFIG.mailbox_provider) || "sitepool").toLowerCase() === "sitepool"
+    ? "sitepool" : "remail";
+}
+
+/** 当前来源下那把密钥的打码值。
+ *  按来源取是必须的：走本站号池时值存在 sitepool_tool_key、直连上游时在 remail_api_key，
+ *  拿错一个去看会永远显示「还没填过」，用户以为自己填失败了。 */
+function keyMask() {
+  return mailboxProvider() === "sitepool"
+    ? (CONFIG.sitepool_tool_key_mask || "")
+    : (CONFIG.remail_api_key_mask || "");
+}
+
+/** 这把密钥落到哪个配置字段，同样取决于当前来源。 */
+function keyConfigField() {
+  return mailboxProvider() === "sitepool" ? "sitepool_tool_key" : "remail_api_key";
+}
+
+function syncRegPhoneVerify() {
+  const on = $("cf-reg_phone_verify").checked;
+  $("reg-phone-verify-hint").textContent = on
+    ? "勾选 = 注册后自动过手机号验证，过完可用于 Codex"
+    : "不勾选 = 只用邮箱注册，得到的账号可以用于生图，不能用于Codex";
+}
+
+/** 代理那一格的提示：显示已存的是什么，或者提醒留空等于走本机系统代理。
+ *  本机 Clash 之类多半是机房 IP，实测会被 Cloudflare 全拦，所以留空时要说清楚。
+ */
+function renderProxyHint(extra) {
+  const el = $("hint-proxy");
+  if (!el) return;
+  const saved = String(CONFIG.proxy || "").trim();
+  if (extra) {
+    el.textContent = extra;
+    el.style.color = "#86efac";
+    return;
+  }
+  el.style.color = "";
+  el.textContent = saved
+    ? ("已保存：" + maskProxy(saved) + "（改完点「保存代理」）")
+    : "当前没填：走本机系统代理（Clash 之类）。建议填住宅代理。";
+}
+
+/** 代理串里带用户名密码，日志/提示里只露主机端口。 */
+function maskProxy(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol + "//" + (u.username ? "***@" : "") + u.host;
+  } catch (e) {
+    return url.length > 48 ? url.slice(0, 48) + "…" : url;
+  }
+}
+
+/** 工具密钥那一格的提示：和代理同款写法。
+ *  已保存的值只显示在这行提示里，输入框始终是空的（服务端只回打码值，界面拿不到原文）。
+ *  留空 = 不改动，所以「保存密钥」按钮只在真的粘了新密钥时才生效。 */
+function renderKeyHint(extra) {
+  const el = $("hint-remail");
+  if (!el) return;
+  if (extra) {
+    el.textContent = extra;
+    el.style.color = "#86efac";
+    return;
+  }
+  el.style.color = "";
+  const mask = keyMask();
+  el.textContent = mask
+    ? ("已保存：" + mask + "（改完点「保存密钥」）")
+    : "一把密钥同时用于取邮箱和取号码。到站内「自建号池」页创建并复制。";
+}
+
+/** 设置弹窗里那个工具密钥的提示：和注册页同款写法。
+ *  那一格靠弹窗底部的「保存」落盘，所以提示里说的是点「保存」而不是「保存密钥」。 */
+function renderKeyHintModal() {
+  const el = $("hint-remail-modal");
+  if (!el) return;
+  const mask = keyMask();
+  el.textContent = mask
+    ? ("已保存：" + mask + "（改完点「保存」）")
+    : "一把密钥同时用于取邮箱和取号码。和「注册账号」页是同一个值，在哪填都行。";
+}
+
+function collectConfig() {
+  const patch = {};
+  for (const key of CFG_TEXT) { const el = $("cf-" + key); if (el) patch[key] = el.value.trim(); }
+  for (const key of CFG_NUM) { const el = $("cf-" + key); if (el) patch[key] = parseInt(el.value || "0", 10) || 0; }
+  for (const key of CFG_BOOL) { const el = $("cf-" + key); if (el) patch[key] = el.checked; }
+  for (const key of CFG_SECRET) {
+    const el = $("cf-" + key);
+    if (el && el.value.trim()) patch[key] = el.value.trim();
+  }
+  // ★ 文本值和服务器上一样就别提交。
+  //   「代理」在设置弹窗和注册页各有一个输入框，都是同一个配置键。页面开久了，
+  //   某个框里还是过期值（常见是空的），点一下「保存设置」就会拿它把服务器上
+  //   刚存好的代理覆盖掉 —— 实测真发生过。空值和原值相同都不提交，就不会误伤；
+  //   真想清空时，框里是空、服务器非空，两者不同，照样能存下去。
+  for (const key of Object.keys(patch)) {
+    if (typeof patch[key] === "string" && patch[key] === String(CONFIG[key] ?? "").trim()) delete patch[key];
+  }
+  // 设置弹窗里那个 Key 是同一个值的第二入口，落点和注册页共用 keyConfigField()。
+  const second = $("cf-remail_api_key_2").value.trim();
+  if (second) patch[keyConfigField()] = second;
+  return patch;
+}
+
+async function saveSettings() {
+  try {
+    const data = await api("/api/config", { method: "POST", body: collectConfig() });
+    CONFIG = data.config || {};
+    for (const key of CFG_SECRET) { const el = $("cf-" + key); if (el) el.value = ""; }
+    $("cf-remail_api_key_2").value = "";
+    await loadConfig();
+    if (data.problems && data.problems.length) toast("已保存，但有问题：" + data.problems.join("；"), "bad");
+    else toast("设置已保存", "ok");
+    $("modal").classList.remove("on");
+  } catch (err) { toast("保存失败：" + err.message, "bad"); }
+}
+
+// 打开设置时把「代理」重新拉一次服务器上的真值。
+// 不刷新的话，弹窗里显示的是页面加载那一刻的旧值，一保存就把新值覆盖回去了。
+$("btn-settings").onclick = async () => {
+  $("modal").classList.add("on");
+  try {
+    const data = await api("/api/config");
+    CONFIG = data.config || CONFIG;
+    $("cf-proxy").value = CONFIG.proxy || "";
+    renderKeyHintModal();
+  } catch (err) { /* 拉不到就沿用页面上的旧值 */ }
+};
+$("btn-close-settings").onclick = () => $("modal").classList.remove("on");
+$("btn-save-settings").onclick = saveSettings;
+$("modal").onclick = (e) => { if (e.target === $("modal")) $("modal").classList.remove("on"); };
+
+// 账号凭证弹窗（查看密码 / 2FA）
+$("btn-cred-close").onclick = closeCred;
+$("cred-modal").onclick = (e) => { if (e.target === $("cred-modal")) closeCred(); };
+$("btn-cred-copy").onclick = () => {
+  const a = ACCOUNTS[credIndex];
+  if (!a) { toast("没选中账号", "bad"); return; }
+  const secret = String(a.totp_secret || "").trim();
+  const lines = [
+    "邮箱：" + (a.email || ""),
+    "密码：" + (String(a.password || "").trim() || "无"),
+    "2FA密钥：" + (secret || "无"),
+  ];
+  copyText(lines.join("\n"));
+};
+
+/* ------------------------------------------------------------------ 注册页落盘 */
+
+/** 把注册页上填的东西落盘。「开始注册」会先调用它。
+ */
+async function persistRegisterFields() {
+  const patch = {
+    register_count: parseInt($("cf-register_count").value || "1", 10) || 1,
+    concurrency: parseInt($("cf-concurrency").value || "1", 10) || 1,
+  };
+  // 页面上已经没有邮箱目标选择器了，这里一律不回写 mailbox_target_id，
+  // 免得把配置里那条（直连上游要用的）目标覆盖掉。
+  // 这一把密钥写进哪个字段取决于当前来源：本站号池 -> sitepool_tool_key；直连上游 -> remail_api_key。
+  const toolKey = $("cf-remail_api_key").value.trim();
+  if (toolKey) patch[keyConfigField()] = toolKey;
+
+  // 手机号验证是可选项：勾选状态本身就是开关，必须每次都写（取消勾选要能生效）。
+  // 号码和邮箱共用同一把工具密钥，所以这里没有第二个密钥要落盘了。
+  patch.enable_activation = $("cf-reg_phone_verify").checked;
+
+  // 账号加固同理：勾选状态本身就是开关，必须每次都写（取消勾选要能生效）。
+  patch.harden_after_register = $("cf-reg_harden").checked;
+
+  // ★ 代理是每一轮注册都要用的出口，和「要不要过手机号验证」无关，
+  //   所以必须放在上面那个 if 外面 —— 以前塞在里面，不勾手机验证时清空代理根本存不下去，
+  //   刷新页面又被旧值回填（2026-10-03 老大报的就是这个）。
+  // ★ 只在「真的和当前配置不一样」时才写回：开着旧标签页点开始注册，
+  //   它会拿旧值把配置文件里刚改好的代理覆盖掉（踩过：切了干净 IP 又被写回脏 IP）。
+  const regProxy = $("cf-reg_proxy").value.trim();
+  if (regProxy !== String(CONFIG.proxy || "").trim()) patch.proxy = regProxy;
+
+  const data = await api("/api/config", { method: "POST", body: patch });
+  CONFIG = data.config || CONFIG;
+  if (toolKey) {
+    $("cf-remail_api_key").value = "";
+    renderKeyHint();
+  }
+  return toolKey;
+}
+
+/* ------------------------------------------------------------------ 注册 */
+let regCursor = 0;
+let regTimer = null;
+let regWasRunning = false;
+// 卡片视图用的状态：全部日志（带 index，便于按账号过滤）、当前选中的账号、任务表。
+let regLogs = [];
+let regTasks = {};
+let regSelected = 0;
+
+// 每个阶段占的进度。只影响观感，不影响任何逻辑。
+const REG_STAGES = {
+  starting: [6, "准备中"],
+  allocate: [14, "分配邮箱"],
+  browser: [22, "启动浏览器"],
+  navigate: [30, "打开登录页"],
+  email: [38, "提交邮箱"],
+  wait_otp: [50, "等待邮箱验证码"],
+  resend_otp: [50, "重发验证码"],
+  recover_otp: [52, "恢复验证码"],
+  submit_otp: [60, "填写验证码"],
+  password: [64, "设置密码"],
+  profile: [72, "填写姓名生日"],
+  session: [82, "读取账号凭证"],
+  liveness: [86, "检测账号有效性"],
+  quota: [90, "查询生图额度"],
+  activation: [94, "手机验证 / 激活"],
+  done: [100, "完成"],
+};
+
+function regPct(t) {
+  if (t.status === "success" || t.status === "failed" || t.status === "cancelled") return 100;
+  const hit = REG_STAGES[String(t.stage || "")];
+  return hit ? hit[0] : 4;
+}
+
+function renderRegTasks() {
+  const box = $("reg-tasks");
+  const list = Object.values(regTasks).sort((a, b) => (a.index || 0) - (b.index || 0));
+  $("reg-task-count").textContent = list.length ? `共 ${list.length} 个账号` : "";
+  if (!list.length) {
+    box.innerHTML = '<div class="empty" style="padding:18px 0">还没有任务</div>';
+    return;
+  }
+  box.innerHTML = list.map((t) => {
+    const pct = regPct(t);
+    const cls = t.status === "success" ? "s-ok"
+      : (t.status === "failed" ? "s-bad" : (t.status === "cancelled" ? "s-warn" : ""));
+    const stageLabel = (REG_STAGES[String(t.stage || "")] || [0, t.stage || ""])[1];
+    // 卡片最后一行显示这个账号**最新一条日志**，比重复 stage 文案有信息量。
+    const mine = regLogs.filter((l) => Number(l.index || 0) === t.index);
+    const lastMsg = mine.length ? String(mine[mine.length - 1].message || "") : "";
+    const say = t.error ? String(t.error) : (lastMsg || String(t.detail || stageLabel || ""));
+    return `<div class="task ${cls} ${regSelected === t.index ? "on" : ""}" data-i="${t.index}">
+      <div class="top">
+        <span class="who">${esc(t.email || ("账号 " + t.index))}</span>
+        <span class="pct">${pct}%</span>
+      </div>
+      <div class="mail">${esc(t.email ? (t.detail || stageLabel || "") : "等待分配邮箱")}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="say" title="${esc(say)}">${esc(say.slice(0, 70))}</div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll("[data-i]").forEach((el) => {
+    el.onclick = () => selectRegCard(parseInt(el.dataset.i, 10));
+  });
+}
+
+function selectRegCard(index) {
+  regSelected = (regSelected === index) ? 0 : index;
+  const wrap = $("reg-log-wrap");
+  if (!regSelected) {
+    wrap.style.display = "none";
+  } else {
+    wrap.style.display = "";
+    const t = regTasks[regSelected] || {};
+    $("reg-log-title").textContent = `账号 ${regSelected} · ${t.email || "（未分配邮箱）"} 的文字日志`;
+    renderRegLog();
+  }
+  renderRegTasks();
+}
+
+function renderRegLog() {
+  const box = $("reg-log");
+  const rows = regLogs.filter((l) => Number(l.index || 0) === regSelected);
+  box.innerHTML = "";
+  if (!rows.length) {
+    box.innerHTML = '<div class="t">这个账号还没有日志</div>';
+    return;
+  }
+  for (const item of rows) box.appendChild(logLine(item));
+  box.scrollTop = box.scrollHeight;
+}
+
+$("btn-reg-log-back").onclick = () => selectRegCard(regSelected);
+
+function resetRegView() {
+  regLogs = [];
+  regTasks = {};
+  regSelected = 0;
+  $("reg-log-wrap").style.display = "none";
+  renderRegTasks();
+}
+
+function setRegRunning(running) {
+  $("btn-start").disabled = running;
+  $("btn-stop").disabled = !running;
+  $("st-state").textContent = running ? "运行中" : "空闲";
+  $("st-state").style.color = running ? "var(--ok)" : "#dbeafe";
+  if (running && !regTimer) regTimer = setInterval(() => pollRegister(), 1200);
+  if (!running && regTimer) { clearInterval(regTimer); regTimer = null; }
+}
+
+async function pollRegister() {
+  try {
+    const s = await api("/api/state?since_log=" + regCursor);
+    regCursor = s.log_cursor || 0;
+    // 日志全部留一份（带 index），点卡片时按账号过滤再渲染。
+    if (s.logs && s.logs.length) {
+      regLogs.push(...s.logs);
+      if (regLogs.length > 3000) regLogs = regLogs.slice(-3000);
+    }
+    regTasks = s.tasks || {};
+    renderRegTasks();
+    if (regSelected) renderRegLog();
+    const counts = s.counts || {};
+    const done = (counts.success || 0) + (counts.failed || 0) + (counts.cancelled || 0);
+    $("st-done").textContent = `${done} / ${s.total || 0}`;
+    $("st-success").textContent = counts.success || 0;
+    $("st-fail").textContent = (counts.failed || 0);
+    setRegRunning(!!s.running);
+    // 跑完那一刻刷新一次账号池，新号立刻能在「测试生图」里选到。
+    if (regWasRunning && !s.running) {
+      await loadAccounts();
+      loadAccountOptions();
+    }
+    regWasRunning = !!s.running;
+  } catch (err) { /* 静默：轮询失败不打扰用户 */ }
+}
+
+$("btn-start").onclick = async () => {
+  try {
+    const key = await persistRegisterFields();
+    const problems = [];
+    if (!key && !keyMask()) problems.push("还没填工具密钥");
+    if (problems.length) { toast(problems.join("；"), "bad"); return; }
+    await api("/api/register/start", { method: "POST", body: {} });
+    resetRegView();
+    regCursor = 0;
+    setRegRunning(true);
+    toast("已开始注册", "ok");
+  } catch (err) { toast(err.message, "bad"); }
+};
+
+$("btn-stop").onclick = async () => {
+  try { await api("/api/register/stop", { method: "POST", body: {} }); toast("已请求停止"); }
+  catch (err) { toast(err.message, "bad"); }
+};
+
+// 「注册后过手机号验证」只改右侧提示文案：号码和邮箱共用同一把工具密钥，没有额外输入框
+$("cf-reg_phone_verify").onchange = syncRegPhoneVerify;
+$("cf-reg_harden").onchange = syncRegHarden;
+
+// 工具密钥的显式保存。和代理同款：只写这一个字段，不动注册页其它值。
+// 空着点按钮不算「清空」—— 服务端只回打码值，空着本来就代表「不修改」，
+// 所以清空密钥这件事不放进这个按钮（免得手一滑把密钥弄没了）。
+$("btn-save-key").onclick = async () => {
+  const typed = $("cf-remail_api_key").value.trim();
+  if (!typed) { toast("请先粘贴工具密钥", "bad"); return; }
+  try {
+    const patch = {};
+    patch[keyConfigField()] = typed;
+    const data = await api("/api/config", { method: "POST", body: patch });
+    CONFIG = data.config || CONFIG;
+    $("cf-remail_api_key").value = "";
+    renderKeyHint("已保存。下一轮注册就用这把密钥。");
+    toast("工具密钥已保存", "ok");
+  } catch (err) { toast(err.message, "bad"); }
+};
+
+// 代理的显式保存 / 清空。以前没有按钮，只能靠「开始注册」顺带落盘，
+// 而那段回写又被手机号验证的 if 关着，清空后刷新照样回填。
+$("btn-save-proxy").onclick = async () => {
+  try {
+    await persistRegisterFields();
+    renderProxyHint("已保存。下一轮注册就按这个出口走。");
+    toast("代理已保存", "ok");
+  } catch (err) { toast(err.message, "bad"); }
+};
+
+$("btn-clear-proxy").onclick = async () => {
+  try {
+    $("cf-reg_proxy").value = "";
+    await persistRegisterFields();
+    renderProxyHint("已清空。下一轮会走本机系统代理。");
+    toast("代理已清空", "ok");
+  } catch (err) { toast(err.message, "bad"); }
+};
+
+/* ------------------------------------------------------------------ 账号池 */
+let ACCOUNTS = [];
+let quotaCursor = 0;
+let acTimer = null;
+// 测活单独用一套游标/定时器：它走的是引擎（/api/state），和查额度那条路
+// （/api/quota/state）是两套后端机制，共用 acTimer 会互相把定时器清掉。
+let liveCursor = 0;
+let liveTimer = null;
+let liveRunning = false;
+
+/* ===================== 账号凭证：查看密码 / 2FA =====================
+ *
+ * 老大要的：账号池每行一个按钮，点开显示**密码 + 2FA 密钥**，
+ * 没有就显示「无」；**最好连当前 2FA 验证码也带上**。
+ *
+ * 两点设计说明：
+ *  1. **不用加后端接口**：`/api/accounts` 走的是 `_account_view()`，它只把
+ *     `access_token` 换成尾巴，`password` / `totp_secret` 本来就下发了。
+ *  2. **验证码在前端算**：后端只给密钥，前端按 RFC 6238 自己算 ——
+ *     好处是能**每秒刷新 + 显示剩余秒数**，不用一直轮询后端。
+ *     `crypto.subtle` 只在「可信来源」可用，`127.0.0.1` 算可信；
+ *     万一没有（比如用局域网 IP 打开），就退化成只显示密钥 + 一句提示。
+ */
+let credIndex = -1;
+let credTimer = null;
+
+/** Base32 解码（RFC 4648），容忍小写、空格和缺失的 `=` 填充。 */
+function b32decode(input) {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const s = String(input || "").toUpperCase().replace(/[^A-Z2-7]/g, "");
+  let bits = 0, value = 0;
+  const out = [];
+  for (let i = 0; i < s.length; i++) {
+    value = (value << 5) | A.indexOf(s[i]);
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xFF); bits -= 8; }
+  }
+  return new Uint8Array(out);
+}
+
+/** RFC 6238 TOTP（HMAC-SHA1 / 6 位 / 30 秒），和 Python 侧 `security_setup.totp_now` 等价。 */
+async function totpNow(secret, atMs) {
+  if (!(window.crypto && window.crypto.subtle)) throw new Error("no-subtle");
+  const key = await crypto.subtle.importKey(
+    "raw", b32decode(secret), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const counter = Math.floor((atMs / 1000) / 30);
+  const buf = new ArrayBuffer(8);
+  new DataView(buf).setUint32(4, counter >>> 0, false);   // 高 4 字节保持 0
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, buf));
+  const off = mac[mac.length - 1] & 0x0F;                  // 动态截断
+  const bin = ((mac[off] & 0x7F) << 24) | (mac[off + 1] << 16) | (mac[off + 2] << 8) | mac[off + 3];
+  return String(bin % 1000000).padStart(6, "0");
+}
+
+/** 一行凭证。`value` 为空 -> 显示「无」（老大明确要的行为）。 */
+function credRow(label, value) {
+  const v = String(value || "").trim();
+  if (!v) {
+    return `<div class="cred-line"><span class="cred-k">${esc(label)}</span>` +
+           `<span class="cred-v none">无</span></div>`;
+  }
+  return `<div class="cred-line"><span class="cred-k">${esc(label)}</span>` +
+         `<span class="cred-v">${esc(v)}</span>` +
+         `<button class="btn sm" data-copy="${esc(v)}">复制</button></div>`;
+}
+
+function stopCredTick() {
+  if (credTimer) { clearInterval(credTimer); credTimer = null; }
+}
+
+function startCredTick(secret) {
+  stopCredTick();
+  const codeEl = $("cred-code"), leftEl = $("cred-left");
+  if (!secret || !codeEl) return;
+  const tick = async () => {
+    const now = Date.now();
+    const left = 30 - Math.floor((now / 1000) % 30);
+    if (leftEl) leftEl.textContent = "剩 " + left + " 秒";
+    try {
+      const code = await totpNow(secret, now);
+      codeEl.dataset.code = code;
+      codeEl.textContent = code.slice(0, 3) + " " + code.slice(3);
+    } catch (err) {
+      codeEl.textContent = "不可用";
+      if (leftEl) leftEl.textContent = "此环境没有 crypto.subtle（换 127.0.0.1 打开，或用验证器 App 按密钥自己算）";
+      stopCredTick();
+    }
+  };
+  tick();
+  credTimer = setInterval(tick, 1000);
+}
+
+function wireCredButtons() {
+  const box = $("cred-body");
+  box.querySelectorAll("[data-copy]").forEach((b) => { b.onclick = () => copyText(b.dataset.copy); });
+  const cb = $("btn-copy-code");
+  if (cb) cb.onclick = () => {
+    const el = $("cred-code");
+    copyText((el && el.dataset.code) || "");
+  };
+}
+
+function openCred(i) {
+  const a = ACCOUNTS[i];
+  if (!a) return;
+  credIndex = i;
+  $("cred-mail").textContent = a.email || "(无邮箱)";
+  const secret = String(a.totp_secret || "").trim();
+  const rows = [credRow("密码", a.password), credRow("2FA 密钥", secret)];
+  if (secret) {
+    rows.push(`<div class="cred-line"><span class="cred-k">2FA 验证码</span>` +
+      `<span class="cred-v"><b id="cred-code">……</b>` +
+      `<span id="cred-left" style="color:var(--dim);margin-left:12px"></span></span>` +
+      `<button class="btn sm" id="btn-copy-code">复制</button></div>`);
+  } else {
+    rows.push(credRow("2FA 验证码", ""));
+  }
+  if (a.recovery_codes) rows.push(credRow("恢复码", a.recovery_codes));
+  // ★ otpauth 链接已去掉（老大 2026-10-05）：只留「邮箱 + 密码 + 2FA 密钥（+ 实时验证码）」。
+  //   密钥就在上面那行，验证器 App 手动录入或自己拼 otpauth 都行，不必多占一行。
+  if (!String(a.password || "").trim() && !secret) {
+    rows.push(`<p class="hint" style="margin-top:14px">这个号**既没密码也没 2FA** —— ` +
+      `注册时「账号加固」没勾、或者没设成功。交付出去买家只能靠邮箱验证码登录。</p>`);
+  }
+  $("cred-body").innerHTML = rows.join("");
+  $("cred-modal").classList.add("on");
+  wireCredButtons();
+  startCredTick(secret);
+}
+
+function closeCred() {
+  stopCredTick();
+  $("cred-modal").classList.remove("on");
+}
+
+function copyText(text) {
+  const t = String(text || "");
+  if (!t) { toast("没东西可复制", "bad"); return; }
+  const fallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); toast("已复制", "ok"); }
+    catch (e) { toast("复制失败，请手动选中", "bad"); }
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(() => toast("已复制", "ok")).catch(fallback);
+  } else { fallback(); }
+}
+
+async function loadAccounts() {
+  try {
+    const data = await api("/api/accounts");
+    ACCOUNTS = data.items || [];
+    renderAccounts();
+    const s = data.summary || {};
+    $("ac-total").textContent = s.total || 0;
+    $("ac-success").textContent = s.success || 0;
+    $("ac-quota").textContent = ACCOUNTS.filter((a) => a.quota > 0).length;
+    $("ac-dead").textContent = ACCOUNTS.filter((a) => a.liveness === "dead").length;
+  } catch (err) { toast("读取账号失败：" + err.message, "bad"); }
+}
+
+function statusTag(a) {
+  if (a.liveness === "dead") return '<span class="tag bad">已失效</span>';
+  if (a.status === "failed") return '<span class="tag bad">注册失败</span>';
+  if (a.status === "success") return '<span class="tag ok">正常</span>';
+  if (a.status === "cancelled") return '<span class="tag gray">已取消</span>';
+  return '<span class="tag wait">进行中</span>';
+}
+
+function quotaCell(a) {
+  if (a.quota_unknown) return '<span class="q none">未知</span>';
+  if (a.quota === undefined || a.quota === null || a.quota < 0) return '<span class="q none">未查</span>';
+  return `<span class="q ${a.quota > 0 ? "" : "zero"}">${a.quota}</span>`;
+}
+
+/** 手机接码状态：已接码 = 走过手机验证并成功拿到 Codex 凭证。
+ *
+ * ★ 没接上的（试过失败 failed / 压根没走 skipped）**一律显示成黄色的「未接码」**，
+ *   不在列表上暴露「接码失败」。具体原因留在 title 里，鼠标停上去还能看。
+ */
+function codeTag(a) {
+  const act = String(a.activation || "skipped");
+  if (act === "success") return '<span class="tag ok">已接码</span>';
+  if (act === "running") return '<span class="tag wait">接码中</span>';
+  const why = act === "failed" ? String(a.activation_note || "").trim() : "";
+  const title = why ? ` title="${esc(why)}"` : "";
+  return `<span class="tag wait"${title}>未接码</span>`;
+}
+
+function renderAccounts() {
+  const body = $("ac-body");
+  if (!ACCOUNTS.length) {
+    body.innerHTML = '<tr><td colspan="8" class="empty">还没有账号</td></tr>';
+    return;
+  }
+  body.innerHTML = ACCOUNTS.map((a, i) => `
+    <tr>
+      <td><input type="checkbox" class="chk" data-i="${i}"></td>
+      <td class="mail">${esc(a.email || "(无邮箱)")}<div style="color:var(--dim2);font-size:13px">${esc(a.access_token_tail)}</div></td>
+      <td>${statusTag(a)}</td>
+      <td>${codeTag(a)}</td>
+      <td>${esc(a.plan || "—")}</td>
+      <td>${quotaCell(a)}</td>
+      <td style="font-size:14px;color:var(--dim)">${esc(fmtTime(a.expires_at))}</td>
+      <td style="white-space:nowrap"><button class="btn sm" data-cred="${i}">凭证</button>
+        <button class="btn sm danger" data-del="${esc(a.key)}">删</button></td>
+    </tr>`).join("");
+
+  body.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.onclick = () => deleteAccounts([btn.dataset.del]);
+  });
+  body.querySelectorAll("[data-cred]").forEach((btn) => {
+    btn.onclick = () => openCred(Number(btn.dataset.cred));
+  });
+  body.querySelectorAll(".chk").forEach((box) => {
+    box.onchange = () => {
+      const all = [...body.querySelectorAll(".chk")];
+      $("chk-all").checked = all.length > 0 && all.every((b) => b.checked);
+    };
+  });
+  $("chk-all").checked = false;
+}
+
+function selectedKeys() {
+  return [...document.querySelectorAll("#ac-body .chk:checked")]
+    .map((box) => ACCOUNTS[parseInt(box.dataset.i, 10)]).filter(Boolean).map((a) => a.key);
+}
+
+$("chk-all").onchange = (e) => {
+  document.querySelectorAll("#ac-body .chk").forEach((box) => { box.checked = e.target.checked; });
+};
+
+async function deleteAccounts(keys) {
+  if (!keys.length) return toast("先选中要删的账号", "bad");
+  if (!confirm(`确定删除 ${keys.length} 个账号？`)) return;
+  try {
+    const data = await api("/api/accounts", { method: "DELETE", body: { keys } });
+    toast(`已删除 ${data.removed} 个`, "ok");
+    loadAccounts();
+  } catch (err) { toast(err.message, "bad"); }
+}
+
+$("btn-del").onclick = () => deleteAccounts(selectedKeys());
+// 一键清掉「没用的」记录：
+//   - 没邮箱，或 status = failed / cancelled   -> 注册就没成
+//   - liveness = dead                          -> 注册成了但凭证已失效（被封/被吊销）
+// ★ 以前只看 status，所以「已失效」那条（liveness=dead）永远删不掉 —— 按了等于没按。
+// 已经注册成功、只是没接码/激活失败的**不删**，那是能用的号。
+$("btn-del-failed").onclick = () => {
+  const gone = (a) => !a.email || a.status === "failed" || a.status === "cancelled" || a.liveness === "dead";
+  const keys = (ACCOUNTS || []).filter(gone).map((a) => a.key).filter(Boolean);
+  if (!keys.length) return toast("没有失效或失败的账号", "ok");
+  deleteAccounts(keys);
+};
+$("btn-clear").onclick = async () => {
+  if (!confirm("确定清空全部账号？这个操作不可撤销。")) return;
+  try { await api("/api/accounts/clear", { method: "POST", body: {} }); toast("已清空", "ok"); loadAccounts(); }
+  catch (err) { toast(err.message, "bad"); }
+};
+// 导出 / 交付：**一个按钮**，具体做什么由右边那个下拉决定。
+//   sub2api-data -> 顶层对象 + proxies/accounts 数组，给「账号管理 → 更多操作 → 导入」传文件用
+//   sub2api      -> 一行一条的 Codex 会话 JSON，给新建账号里那个粘贴框用
+//   delivery     -> ★ 给**买家**看的凭证 txt：一行一个号，`邮箱----密码----2FA密钥`
+//
+// ★ 2026-10-05：`delivery` 原来是**独立一个「交付包」按钮**，老大要求把它并进格式下拉里 ——
+//   它本来就是「换一种打包格式」而已，跟其它两种格式是一类东西，不该单独占一个按钮。
+$("btn-export").onclick = () => {
+  const keys = selectedKeys();
+  const format = $("ex-format").value;
+
+  if (format === "delivery") {
+    // 交付包走自己的端点，**不带 format 参数**（那边不看它）
+    const qs = new URLSearchParams();
+    if (keys.length) qs.set("keys", keys.join(","));
+    window.location.href = "/api/delivery/export?" + qs.toString();
+    toast(keys.length ? `正在导出选中的 ${keys.length} 个账号的凭证`
+                      : "正在导出全部注册成功账号的凭证", "ok");
+    return;
+  }
+
+  const qs = new URLSearchParams({ format });
+  if (keys.length) qs.set("keys", keys.join(","));
+  window.location.href = "/api/accounts/export?" + qs.toString();
+  toast(keys.length ? `正在导出选中的 ${keys.length} 个账号` : "正在导出全部注册成功的账号", "ok");
+};
+
+$("btn-import").onclick = async () => {
+  const text = $("imp-text").value;
+  if (!text.trim()) return toast("先把要导入的内容粘进去", "bad");
+  const btn = $("btn-import");
+  btn.disabled = true; btn.textContent = "处理中…";
+  try {
+    const data = await api("/api/accounts/import", {
+      method: "POST",
+      body: { text },
+    });
+    const notes = (data.notes || []).join("；");
+    const msg = `导入完成：新增 ${data.added}，更新 ${data.updated}`;
+    toast(msg + (notes ? "（" + notes + "）" : ""), "ok");
+    $("imp-text").value = "";
+    loadAccounts();
+  } catch (err) { toast("导入失败：" + err.message, "bad"); }
+  finally { btn.disabled = false; btn.textContent = "解析并导入"; }
+};
+
+/* 测活 */
+// 后端 POST /api/accounts/liveness 一直是有的，只是界面上没给入口。
+// 它走引擎（和「开始注册」抢同一把锁），所以注册在跑时会被 409 挡下。
+$("btn-liveness").onclick = async () => {
+  if (liveRunning) {
+    try {
+      await api("/api/register/stop", { method: "POST" });
+      toast("正在停止测活…", "ok");
+    } catch (err) { toast(err.message, "bad"); }
+    return;
+  }
+  try {
+    await api("/api/accounts/liveness", { method: "POST" });
+    liveCursor = 0;
+    $("ac-log").innerHTML = "";
+    setLiveBtn(true);
+    toast("开始测活", "ok");
+    if (!liveTimer) liveTimer = setInterval(pollLiveness, 1200);
+  } catch (err) { toast(err.message, "bad"); }
+};
+
+/** 测活按钮在「测活 / 停止测活」之间切换。
+ *  单独给个停止入口是因为「停止」那个大按钮在注册页 —— 从账号池发起测活时
+ *  它是灰的，点了也停不下来。 */
+function setLiveBtn(running) {
+  liveRunning = !!running;
+  const b = $("btn-liveness");
+  if (!b) return;
+  b.textContent = liveRunning ? "停止测活" : "测活";
+  b.classList.toggle("danger", liveRunning);
+}
+
+async function pollLiveness() {
+  try {
+    const s = await api("/api/state?since_log=" + liveCursor);
+    liveCursor = s.log_cursor || 0;
+    pushLogs($("ac-log"), s.logs, true);
+    if (!s.running) {
+      if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+      setLiveBtn(false);
+      loadAccounts();
+      const c = s.counts || {};
+      const dead = c.failed || 0;
+      toast(`测活完成：${c.success || 0} 个有效，${dead} 个已失效`, dead ? "bad" : "ok");
+    }
+  } catch (err) {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    setLiveBtn(false);
+  }
+}
+
+/* 查额度 */
+$("btn-quota").onclick = async () => {
+  try {
+    const keys = selectedKeys();
+    await api("/api/quota/check", { method: "POST", body: { keys } });
+    quotaCursor = 0;
+    $("ac-log").innerHTML = "";
+    toast("开始查询额度", "ok");
+    if (!acTimer) acTimer = setInterval(pollQuota, 1200);
+  } catch (err) { toast(err.message, "bad"); }
+};
+
+async function pollQuota() {
+  try {
+    const s = await api("/api/quota/state?since_log=" + quotaCursor);
+    quotaCursor = s.log_cursor || 0;
+    pushLogs($("ac-log"), s.logs, true);
+    if (!s.running && acTimer) {
+      clearInterval(acTimer); acTimer = null;
+      loadAccounts();
+      if (s.result && s.result.checked) toast(`额度查询完成：${s.result.usable} 个可生图`, "ok");
+    }
+  } catch (err) { if (acTimer) { clearInterval(acTimer); acTimer = null; } }
+}
+
+/* ------------------------------------------------------------------ 生图 */
+function loadAccountOptions() {
+  const sel = $("im-account");
+  const keep = sel.value;
+  const usable = ACCOUNTS.filter((a) => a.has_token);
+  sel.innerHTML = "";
+  if (!usable.length) {
+    sel.innerHTML = '<option value="">— 还没有可用账号 —</option>';
+    $("im-account-hint").textContent = "先去「注册账号」跑一个，或到「账号池」导入。";
+    return;
+  }
+  for (const a of usable) {
+    const opt = document.createElement("option");
+    opt.value = a.key;
+    const q = (a.quota_unknown || a.quota < 0) ? "" : `（额度 ${a.quota}）`;
+    opt.textContent = (a.email || a.key) + q;
+    sel.appendChild(opt);
+  }
+  if (keep) { sel.value = keep; if (!sel.value) sel.selectedIndex = 0; }
+  $("im-account-hint").textContent = "额度为 0 的账号生成会失败，先在账号池查一下额度。";
+}
+
+let imCursor = 0, imTimer = null;
+
+$("btn-gen").onclick = async () => {
+  const prompt = $("im-prompt").value.trim();
+  if (!prompt) return toast("先写提示词", "bad");
+  const btn = $("btn-gen");
+  btn.disabled = true; btn.textContent = "生成中…";
+  $("im-log").innerHTML = "";
+  imCursor = 0;
+  try {
+    await api("/api/image/generate", {
+      method: "POST",
+      body: { prompt, key: $("im-account").value, aspect: $("im-aspect").value },
+    });
+    if (!imTimer) imTimer = setInterval(pollImage, 1200);
+  } catch (err) { toast(err.message, "bad"); btn.disabled = false; btn.textContent = "开始生成"; }
+};
+
+async function pollImage() {
+  try {
+    const s = await api("/api/image/state?since_log=" + imCursor);
+    imCursor = s.log_cursor || 0;
+    pushLogs($("im-log"), s.logs, true);
+    if (!s.running && imTimer) {
+      clearInterval(imTimer); imTimer = null;
+      const btn = $("btn-gen"); btn.disabled = false; btn.textContent = "开始生成";
+      if (s.result && s.result.ok) { toast("生成完成", "ok"); loadShots(); }
+      else toast("生成失败：" + (s.error || (s.result && s.result.error) || "未知原因"), "bad");
+    }
+  } catch (err) { if (imTimer) { clearInterval(imTimer); imTimer = null; } }
+}
+
+async function loadShots() {
+  try {
+    const data = await api("/api/images");
+    const items = data.items || [];
+    $("im-dir").textContent = data.dir || "";
+    const box = $("im-shots");
+    if (!items.length) { box.innerHTML = '<div class="empty" style="grid-column:1/-1">还没有生成过图片</div>'; return; }
+    box.innerHTML = items.map((it) => `
+      <div class="shot">
+        <img src="${esc(it.url)}" alt="" loading="lazy" data-full="${esc(it.url)}">
+        <div class="cap">
+          <b>${it.width && it.height ? it.width + "×" + it.height : "—"}</b>
+          ${esc((it.prompt || "").slice(0, 70))}
+        </div>
+      </div>`).join("");
+    box.querySelectorAll("img[data-full]").forEach((img) => {
+      img.onclick = () => { $("big-img").src = img.dataset.full; $("big").classList.add("on"); };
+    });
+  } catch (err) { /* 忽略 */ }
+}
+
+$("btn-refresh-shots").onclick = loadShots;
+$("big").onclick = () => $("big").classList.remove("on");
+
+/* 刷新页面后接管正在跑的后台任务，别让用户以为卡住了 */
+async function resumeJobs() {
+  try {
+    const s = await api("/api/image/state");
+    if (s.running) {
+      imCursor = Math.max(0, (s.log_cursor || 0) - (s.logs || []).length);
+      $("btn-gen").disabled = true;
+      $("btn-gen").textContent = "生成中…";
+      pushLogs($("im-log"), s.logs, true);
+      if (!imTimer) imTimer = setInterval(pollImage, 1200);
+    }
+  } catch (e) { /* 忽略 */ }
+  try {
+    const s = await api("/api/quota/state");
+    if (s.running) {
+      quotaCursor = Math.max(0, (s.log_cursor || 0) - (s.logs || []).length);
+      pushLogs($("ac-log"), s.logs, true);
+      if (!acTimer) acTimer = setInterval(pollQuota, 1200);
+    }
+  } catch (e) { /* 忽略 */ }
+  // 刷新页面时如果正有一轮测活在跑，把按钮和日志接回来。
+  // 不接的话按钮显示「测活」，但引擎其实在忙 —— 再点会被 409 挡下，看着像坏了。
+  try {
+    const s = await api("/api/state");
+    if (s.running && s.kind === "liveness") {
+      liveCursor = Math.max(0, (s.log_cursor || 0) - (s.logs || []).length);
+      pushLogs($("ac-log"), s.logs, true);
+      setLiveBtn(true);
+      if (!liveTimer) liveTimer = setInterval(pollLiveness, 1200);
+    }
+  } catch (e) { /* 忽略 */ }
+}
+
+/* ------------------------------------------------------------ 开始前检查 */
+
+/* 一行检查结果。四种状态用不同符号+颜色区分，别让人去猜：
+     ✓ 通过   ✕ 必须先解决（会挡住开跑）   ! 能跑但要注意   ○ 跳过    */
+function pfRow(c) {
+  const mark = c.skipped ? "○" : (c.ok ? "✓" : (c.fatal ? "✕" : "!"));
+  const color = c.skipped ? "#8b93a7" : (c.ok ? "#38d39f" : (c.fatal ? "#ff6b6b" : "#f0b429"));
+  let html = '<div style="display:flex;gap:10px;align-items:flex-start;'
+    + 'padding:9px 0;border-top:1px solid rgba(255,255,255,.07)">'
+    + '<span style="color:' + color + ';font-weight:700;width:14px;flex:none">' + mark + '</span>'
+    + '<div style="flex:1;min-width:0">'
+    + '<div style="font-size:13px">' + esc(c.name)
+    + '<span style="opacity:.72;margin-left:8px">' + esc(c.detail || "") + '</span></div>';
+  if (c.hint) html += '<div class="hint" style="margin:5px 0 0">' + esc(c.hint) + '</div>';
+  html += '</div></div>';
+  return html;
+}
+
+function renderPreflight(data) {
+  const checks = data.checks || [];
+  $("pf-list").innerHTML = checks.map(pfRow).join("");
+  $("pf-summary").textContent = data.summary || "";
+  $("pf-summary").style.color = data.ok ? "#38d39f" : "#f0b429";
+  // 内核没就绪才把「下载内核」露出来 —— 平时别给小白多一个按钮
+  const kernel = checks.find((c) => c.id === "kernel");
+  $("btn-pf-kernel").style.display = (kernel && !kernel.ok) ? "" : "none";
+}
+
+async function runPreflight(deep) {
+  const btn = $("btn-pf-run");
+  const label = deep ? "检查中…（会真开一次浏览器）" : "检查中…";
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = label;
+  if (deep) $("pf-summary").textContent = "正在联网检查，并会真启动一次浏览器，约需 10~30 秒…";
+  // ★ 深检后端最长要等 90 秒（浏览器启动测试的预算）。这里给 150 秒硬超时：
+  //   万一网络层卡住、或后端那边出意外没返回，页面不能永远停在「检查中…」——
+  //   2026-10-09 就踩过一次，用户只能干等，连重试按钮都是灰的。
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), deep ? 150000 : 30000);
+  try {
+    renderPreflight(await api("/api/preflight" + (deep ? "?deep=1" : ""), { signal: ctl.signal }));
+  } catch (e) {
+    const aborted = e && (e.name === "AbortError" || /abort/i.test(String(e.message || "")));
+    $("pf-summary").textContent = aborted
+      ? "检查超时了（一直没等到结果）。再点一次「开始检查」通常就好；若总是超时，看 logs 目录里的日志。"
+      : "检查失败：" + e.message;
+    $("pf-summary").style.color = "#ff6b6b";
+  } finally {
+    clearTimeout(timer);
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function downloadKernel() {
+  const btn = $("btn-pf-kernel");
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "下载中…请耐心等";
+  // ★ 这一步要几分钟，必须明确告诉用户「别关窗口」，否则他会当成卡死然后强杀
+  $("pf-summary").textContent = "正在下载浏览器内核（约 150MB），请勿关闭本窗口…";
+  $("pf-summary").style.color = "#f0b429";
+  try {
+    const r = await api("/api/preflight/kernel", { method: "POST" });
+    toast(r.already ? "内核本来就已经就绪" : "内核下载完成", "");
+  } catch (e) {
+    toast("下载内核失败：" + e.message, "bad");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+    await runPreflight(false);
+  }
+}
+
+$("btn-pf-run").addEventListener("click", () => runPreflight(true));
+$("btn-pf-kernel").addEventListener("click", downloadKernel);
+
+/* ------------------------------------------------------------------ 启动 */
+(async function boot() {
+  try { await loadConfig(); } catch (e) { toast("读取配置失败：" + e.message, "bad"); }
+  // 先把「开始前检查」跑起来（快检，毫秒级）。不 await：别拖慢后面那些加载，
+  // 但有问题会第一时间显示在页面最上面。
+  runPreflight(false);
+  try {
+    const meta = await api("/api/meta");
+    const proxy = meta.proxy_in_use ? ("代理：" + meta.proxy_in_use) : "代理：直连";
+    $("data-dir").innerHTML = esc(proxy) + "<br>" + esc("数据：" + (meta.data_dir || ""));
+    if (meta.app) document.title = meta.app;
+  } catch (e) { /* 忽略 */ }
+  await pollRegister();
+  await loadAccounts();
+  loadAccountOptions();
+  await loadShots();
+  await resumeJobs();
+})();
+</script>
+</body>
+</html>

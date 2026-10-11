@@ -1,0 +1,36 @@
+# ★ 运行时数据：真实账号、配置（含工具密钥）、日志 —— 永远不要提交
+data/
+logs/
+
+# 浏览器内核缓存（约 600MB，做离线包时会拷进来）
+browser/
+
+# 打包 / 构建产物
+dist/
+dist-green/
+dist-src/
+build/
+release/
+.cache/
+*.spec
+!build.spec
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 本地备份 / 编辑器临时文件
+*.bak
+*.bak-*
+*~
+attic/
+
+# 密钥
+.env
+.env.*
+
+# os
+.DS_Store
+Thumbs.db

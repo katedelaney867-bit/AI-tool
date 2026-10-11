@@ -1,0 +1,74 @@
+﻿# AI 小工具 —— 依赖锁文件（交付源码时用它，别用 requirements.txt）
+#
+# ★ 为什么必须钉死版本：
+#   原来的 requirements.txt 只写 `>=`，客户 pip install 会装到「当时最新」的版本。
+#   而 cloakbrowser 是 stealth Chromium 的封装 —— 它换个版本，浏览器指纹行为就可能变，
+#   表现成「注册成功率莫名下降」，而且极难归因（实测：装的是 0.5.11，已有 0.5.12）。
+#
+# ★ 这个文件是怎么生成的（别再用 pip freeze 本机 venv 了）：
+#   第一版是拿开发机 venv 全量 freeze 减几个打包包 —— 结果把 paramiko / scipy / tqdm
+#   这些**跟本工具无关**的包也锁了进去，客户白下几十 MB，还引发过一次依赖冲突。
+#   正确做法：建一个**干净 venv**，只按 requirements.txt 装，再 freeze。
+#       python -m venv %TEMP%\lockvenv
+#       %TEMP%\lockvenv\Scripts\python.exe -m pip install -r requirements.txt
+#       %TEMP%\lockvenv\Scripts\python.exe -m pip freeze > requirements.lock.txt
+#
+# ★ 但「干净 venv 装出来」= 锁那一刻的最新版，**不等于我们验证过的版本**。
+#   所以 cloakbrowser 被手工钉回 0.5.11 —— 注册 / 2FA / 激活 / 交付这一整套
+#   端到端验证都是在 0.5.11 上跑的（0.5.12 已发布但我们没实测过）。
+#   两个版本期望的内核版本相同（146.0.7680.177.5，已核对），所以换版本不影响
+#   内置内核的识别；但封装层的差异没人测过，就不冒这个险。
+#   要升级它 = 一次**有意识的、可回归的**变更，不是 pip 顺手带上来的。
+#
+# 生成时间：2026-10-06 20:18（cloakbrowser 行手工钉回验证版本）
+# Python：3.12.10
+# 包数：48
+
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.4
+aiosignal==1.4.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+attrs==26.1.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.2
+click==8.5.0
+cloakbrowser==0.5.11
+cryptography==50.0.2
+curl_cffi==0.16.3
+fastapi==0.142.2
+frozenlist==1.8.0
+geoip2==5.3.0
+greenlet==3.5.6
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+maxminddb==3.2.0
+multidict==6.9.1
+opentelemetry-api==1.45.0
+outcome==1.3.0.post0
+playwright==1.63.0
+propcache==0.5.4
+pycparser==3.0
+pydantic_core==2.46.5
+pydantic==2.13.5
+pyee==13.0.1
+PySocks==1.7.1
+requests==2.34.2
+selenium==4.50.0
+sniffio==1.3.1
+socksio==1.0.0
+sortedcontainers==2.4.0
+starlette==1.7.0
+trio==0.34.0
+trio-websocket==0.12.2
+typing_extensions==4.16.0
+typing-inspection==0.4.4
+urllib3==2.8.0
+uvicorn==0.54.0
+websocket-client==1.9.2
+wsproto==1.3.2
+yarl==1.25.1
