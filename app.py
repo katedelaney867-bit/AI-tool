@@ -40,7 +40,7 @@ from core.imagegen import IMAGES_DIR  # noqa: E402
 from core.paths import data_dir, logs_dir, resource  # noqa: E402
 
 UI_DIR = resource("ui")
-SECRET_FIELDS = ("sitepool_tool_key", "remail_api_key", "sms_api_key", "cloak_license_key")
+SECRET_FIELDS = ("sitepool_tool_key", "sms_api_key", "cloak_license_key")
 
 APP_NAME = "AI 小工具"
 QUOTA_JOB = "quota"
@@ -87,7 +87,6 @@ class ConfigPatch(BaseModel):
     sitepool_base: str | None = None
     sitepool_tool_key: str | None = None
     sitepool_phone_sku: str | None = None
-    remail_api_key: str | None = None
     mailbox_target_id: str | None = None
     register_count: int | None = None
     concurrency: int | None = None
@@ -97,7 +96,9 @@ class ConfigPatch(BaseModel):
     page_load_timeout: int | None = None
     humanize: bool | None = None
     geoip: bool | None = None
-    remail_api_base: str | None = None
+    # 半自动模式：碰到人机验证不退出浏览器，等人手动过验证后继续自动填
+    semi_auto: bool | None = None
+    semi_auto_wait: int | None = None
     mailbox_service_mode: str | None = None
     mailbox_supply_policy: str | None = None
     mailbox_project: str | None = None
@@ -197,10 +198,10 @@ def update_config(patch: ConfigPatch) -> dict:
 
 
 def _mailbox_provider():
-    """按配置选邮箱来源：默认本站号池，也保留直连 Remail 的老路。
+    """按配置选邮箱来源：本版本只有本站号池一条路。
 
     构造逻辑统一放在 core.mailbox.build_from_config —— 后台引擎用的是同一个函数，
-    避免「加载目标能走本站、真注册却去打 Remail」这种两端漂移。
+    避免「列表能加载、真注册却报 Key 错」这种两端漂移。
     """
     config = settings_mod.load()
     from core import mailbox as mailbox_pkg
@@ -213,7 +214,7 @@ def _mailbox_provider():
 
 
 def _mailbox_call(fn):
-    """跑一次 Remail 调用，把异常翻译成小白看得懂的话。"""
+    """跑一次号池调用，把异常翻译成小白看得懂的话。"""
     from core.mailbox.base import MailboxError
 
     try:
@@ -228,7 +229,7 @@ def _mailbox_call(fn):
 
 @app.get("/api/mailbox/status")
 def mailbox_status() -> dict:
-    """读 Remail 账户状态（余额/额度），不发单。"""
+    """读号池账户状态（余额/额度），不发单。"""
     return {"ok": True, "status": _mailbox_call(lambda: _mailbox_provider().status())}
 
 

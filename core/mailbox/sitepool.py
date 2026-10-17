@@ -2,14 +2,15 @@
 """本站号池邮箱来源。
 
 把 :class:`~core.mailbox.base.MailboxProvider` 打到自己站内的号池接口上，
-不再直连 Remail。用户只需要一把站内发的「邮箱密钥」。
+不再直连外部邮箱上游。用户只需要一把站内发的「工具密钥」。
 
-与 RemailProvider 的关系：接口完全一样（status / targets / allocate / wait_for_otp），
+与旧的直连 provider 的关系：接口完全一样（status / targets / allocate / wait_for_otp），
 所以 `registration.py`、`browser_flow.py` 一行都不用改 —— 它们只认这个抽象。
 """
 from __future__ import annotations
 
 import logging
+import time
 
 from ..sitepool import (
     SitePoolAuthError,
@@ -39,6 +40,9 @@ class SitePoolProvider(MailboxProvider):
     name = "sitepool"
     label = "本站号池"
 
+    #: 拉商品目录失败时的重试次数（见 _catalog 的说明）。
+    CATALOG_TRIES = 2
+
     def __init__(
         self,
         *,
@@ -48,7 +52,7 @@ class SitePoolProvider(MailboxProvider):
         supply_policy: str = "",
         timeout: int = 30,
     ) -> None:
-        # service_mode / supply_policy 是 Remail 的概念，本站用不到；
+        # service_mode / supply_policy 是旧的直连 provider 的概念，本站用不到；
         # 这里保留参数是为了让 mailbox.build(...) 的调用方不用分支。
         self._client = SitePoolClient(base_url, mail_key=api_key, timeout=timeout)
         self._suffix_by_sku: dict[str, str] = {}
@@ -59,10 +63,22 @@ class SitePoolProvider(MailboxProvider):
     def _catalog(self) -> list[dict]:
         """站内在售的邮箱商品。一次运行内只拉一次，避免每个任务都打一次站内接口。"""
         if self._catalog_cache is None:
-            try:
-                self._catalog_cache = self._client.mail_targets()
-            except SitePoolError as exc:
-                raise MailboxError(str(exc)) from exc
+            # ★ 2026-10-12 加重试：站内走一次网络抖动，原来会直接掉进
+            #   resolve_target 的「拿配置值当 SKU」兜底，把一次抖动伪装成
+            #   「商品已下架」（实测：23:44 报下架、23:47 同一单成功）。
+            last: MailboxError | None = None
+            for attempt in range(1, self.CATALOG_TRIES + 1):
+                try:
+                    self._catalog_cache = self._client.mail_targets()
+                    break
+                except SitePoolError as exc:
+                    last = MailboxError(str(exc))
+                    logger.warning("[号池] 拉邮箱商品列表失败（%s/%s）：%s",
+                                   attempt, self.CATALOG_TRIES, exc)
+                    if attempt < self.CATALOG_TRIES:
+                        time.sleep(1.5)
+            if self._catalog_cache is None:
+                raise last or MailboxError("拉不到站内邮箱商品列表")
         return self._catalog_cache
 
     def resolve_target(self, configured: str = "") -> dict:
@@ -79,9 +95,20 @@ class SitePoolProvider(MailboxProvider):
         try:
             rows = [r for r in self._catalog() if str(r.get("sku") or "").strip()]
         except MailboxError:
-            if want:
+            # ★★ 2026-10-12 实测踩到的坑：这里原来只判 `if want` 就拿它当 SKU 去下单。
+            #   但**老配置里留的是旧的目标格式** `项目ID:后缀`（如 `2:outlook.com`），
+            #   那不是本站 SKU。于是「站内拉目录抖一下」会被伪装成
+            #   「该资源已下架，请重新加载列表再选」—— 报错指向商品，真因是网络抖动，
+            #   排查方向直接跑偏（我为此绕了一遍号池源码）。
+            #   ⇒ 只在**看起来像本站 SKU**（不带冒号）时才敢兜底，
+            #     否则老老实实报「拉不到列表」，让人重试。
+            if want and ":" not in want:
                 return {"sku": want, "suffix": self._suffix_by_sku.get(want, "")}
-            raise
+            raise MailboxError(
+                "拉不到站内邮箱商品列表（站内抖动）。配置里的目标 "
+                f"{want!r} 不是本站的 SKU（本站 SKU 形如 mail_microsoft_code），"
+                "不敢拿它下单 —— 请稍等几秒重试；若反复出现，到「自建号池」页确认商品还在售"
+            ) from None
 
         for row in rows:
             sku = str(row.get("sku") or "").strip()
@@ -127,9 +154,9 @@ class SitePoolProvider(MailboxProvider):
 
         ``id`` 就是站内的 SKU，:meth:`allocate` 会把它原样传回去。
 
-        ★ 关于过滤：``project_filter`` 是 Remail 的「项目」概念，本站没有，直接忽略；
+        ★ 关于过滤：``project_filter`` 是旧的直连 provider 的「项目」概念，本站没有，直接忽略；
         ``suffix_filter`` 只有在**确实筛得到东西**时才生效 ——
-        否则用户从 Remail 切过来时，配置里那条历史 ``mailbox_suffix=outlook.com``
+        否则用户从旧版本切过来时，配置里那条历史 ``mailbox_suffix=outlook.com``
         会把别的后缀全隐藏掉，看起来像「没有可用目标」。
         """
         rows = self._catalog()

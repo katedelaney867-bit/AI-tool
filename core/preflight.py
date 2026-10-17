@@ -49,22 +49,17 @@ def _r(check_id: str, name: str, ok: bool, detail: str, hint: str = "",
 # ------------------------------------------------------------------ ① 密钥
 
 def check_key(config) -> dict:
-    provider = str(getattr(config, "mailbox_provider", "sitepool") or "sitepool").lower()
-    if provider == "sitepool":
-        key = str(getattr(config, "sitepool_tool_key", "") or "").strip()
-        if not key:
-            return _r("key", "工具密钥", False, "还没填",
-                      "到站内「自建号池」页创建一把密钥，复制后粘到上面那一格",
-                      fatal=True)
-        if len(key) < 20:
-            return _r("key", "工具密钥", False, f"看起来太短（{len(key)} 字符）",
-                      "整把复制，别漏字符", fatal=True)
-        return _r("key", "工具密钥", True, f"已填（{len(key)} 字符）", "")
-    key = str(getattr(config, "remail_api_key", "") or "").strip()
+    # 2026-10-18：邮箱来源只剩本站号池一种，这条检查不再分叉。
+    # （以前还有一条「直连外部邮箱上游」的分支，已随上游一起删掉。）
+    key = str(getattr(config, "sitepool_tool_key", "") or "").strip()
     if not key:
-        return _r("key", "Remail 密钥", False, "还没填",
-                  "当前邮箱来源是「直连上游」，需要填 Remail API Key", fatal=True)
-    return _r("key", "Remail 密钥", True, f"已填（{len(key)} 字符）", "")
+        return _r("key", "工具密钥", False, "还没填",
+                  "到站内「自建号池」页创建一把密钥，复制后粘到上面那一格",
+                  fatal=True)
+    if len(key) < 20:
+        return _r("key", "工具密钥", False, f"看起来太短（{len(key)} 字符）",
+                  "整把复制，别漏字符", fatal=True)
+    return _r("key", "工具密钥", True, f"已填（{len(key)} 字符）", "")
 
 
 # ------------------------------------------------------------- ② 浏览器内核
@@ -127,6 +122,18 @@ def check_pool(config) -> dict:
     try:
         client = sitepool.SitePoolClient(base, mail_key=key, timeout=20)
         data = client.balance()
+    except sitepool.SitePoolLicenseRequired as exc:
+        # ★ 「没资格」和「连不上」是两件事，用户的下一步动作完全不同，
+        #   不能都报成「连不上」—— 那会把人带去查网络，查半天查不出来。
+        #   而且这里必须 fatal：没资格的话注册第一步（下邮箱单）就会失败，
+        #   让他点「开始注册」只是白等。
+        return _r("pool", "号池余额", False, str(exc),
+                  "到站内兑换使用资格，再重新创建一把绑定该分组的「工具密钥」",
+                  fatal=True)
+    except sitepool.SitePoolAuthError as exc:
+        # 密钥无效同理：这是配置问题，不是网络问题。
+        return _r("pool", "号池余额", False, str(exc),
+                  "到站内「自建号池」页重新复制一把工具密钥", fatal=True)
     except Exception as exc:  # noqa: BLE001
         return _r("pool", "号池余额", False, f"连不上：{exc}",
                   "检查本机网络；如果开了代理，确认代理能访问本站")

@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+requests>=2.31
+curl_cffi>=0.15.0
+cloakbrowser[geoip]>=0.4.10
+playwright>=1.49.0
+# 只为页面流程里的常量与异常类型（By / Keys / TimeoutException），不使用 webdriver。
+selenium>=4.20.0

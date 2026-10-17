@@ -319,11 +319,11 @@
           <div class="f" style="grid-column:1/-1">
             <span>工具密钥<em>*</em></span>
             <div class="row" style="gap:8px;align-items:center;margin:0">
-              <input type="password" id="cf-remail_api_key" placeholder="粘贴你的工具密钥"
+              <input type="password" id="cf-tool-key" placeholder="粘贴你的工具密钥"
                      style="flex:1;min-width:0">
               <button class="btn sm" id="btn-save-key" type="button">保存密钥</button>
             </div>
-            <div class="hint" id="hint-remail"></div>
+            <div class="hint" id="hint-tool-key"></div>
           </div>
           <label class="f">
             <span>注册数量</span>
@@ -347,6 +347,16 @@
             </div>
             <div class="hint" id="hint-proxy"></div>
           </div>
+        </div>
+
+        <!-- ★ 半自动模式：**没有住宅代理就勾这个**。
+             碰到人机验证时**不退出浏览器**，把窗口留在屏幕上等人手动点一下，
+             点完工具接着把邮箱 / 验证码 / 资料自动填完。
+             勾上会自动关掉「后台运行浏览器」（人得看得见窗口才行）。
+             和「设置 → 行为开关」里那个 cf-semi_auto 是同一个值。 -->
+        <div class="row" style="margin-top:18px;align-items:center;gap:12px">
+          <label class="switch"><input type="checkbox" id="cf-reg_semi_auto"><span>半自动模式（遇到人机验证时等你手动点一下）</span></label>
+          <span class="hint" style="margin:0" id="reg-semi-auto-hint"></span>
         </div>
 
         <!-- 手机号验证是可选项：不勾 = 纯邮箱注册（账号只能生图）；勾了才过手机号。
@@ -535,8 +545,8 @@
       <div class="grid g2">
         <label class="f" style="grid-column:1/-1">
           <span>工具密钥</span>
-          <input type="password" id="cf-remail_api_key_2" placeholder="粘贴你的工具密钥">
-          <div class="hint" id="hint-remail-modal"></div>
+          <input type="password" id="cf-tool-key-2" placeholder="粘贴你的工具密钥">
+          <div class="hint" id="hint-tool-key-2"></div>
         </label>
       </div>
     </div>
@@ -599,6 +609,7 @@
 
       <div class="sec">
         <h4>行为开关</h4>
+        <label class="switch"><input type="checkbox" id="cf-semi_auto"><span>半自动模式：遇到人机验证时<b>等你手动点一下</b>，其余照常自动 —— 没有住宅代理就开这个</span></label>
         <label class="switch"><input type="checkbox" id="cf-headless"><span>后台运行浏览器（看不到窗口）</span></label>
         <label class="switch"><input type="checkbox" id="cf-humanize"><span>拟人化操作（更像真人）</span></label>
         <label class="switch"><input type="checkbox" id="cf-geoip"><span>按代理地区伪装时区/语言</span></label>
@@ -703,15 +714,15 @@ document.querySelectorAll(".nav-btn[data-page]").forEach((btn) => {
 
 /* ------------------------------------------------------------------ 配置 */
 // 只列「面板上真有输入框」的字段：拿不到元素的一律跳过，所以这里少写不会误伤配置。
-// 面板上已经没有的（Remail 接口地址 / 取号模式 / 库存策略 / 项目关键词 / 后缀 / 接码平台…）
+// 面板上已经没有的（取号模式 / 库存策略 / 项目关键词 / 后缀 / 接码平台…）
 // 仍然存在于 config.json 里，只是不再从界面改写。
 const CFG_TEXT = ["proxy"];
 const CFG_NUM = ["register_count", "concurrency", "page_load_timeout", "liveness_timeout",
                  "liveness_concurrency",
                  "otp_timeout", "image_timeout", "oauth_timeout"];
-const CFG_BOOL = ["headless", "humanize", "geoip", "liveness_check", "enable_activation", "harden_after_register"];
-// 注册页那个工具密钥输入框不在这里：它按当前来源落到 sitepool_tool_key 或 remail_api_key，
-// 由 persistRegisterFields / keyConfigField 处理。放进来反而会不分来源地写死 remail_api_key。
+const CFG_BOOL = ["headless", "humanize", "geoip", "liveness_check", "enable_activation", "harden_after_register", "semi_auto"];
+// 注册页那个工具密钥输入框不在这里：它固定落到 sitepool_tool_key，
+// 由 persistRegisterFields / keyConfigField 处理。
 // 界面上已经没有需要单独处理的密钥输入框了。CloakBrowser 授权码去掉了：
 // 它只对 CloakBrowser Pro 二进制有意义，免费档不需要，实测全程留空照样跑。
 // 配置键 cloak_license_key 仍保留，真要 Pro 版就写进 config.json。
@@ -730,9 +741,9 @@ async function loadConfig() {
   // 设置弹窗里那个 Key 是同一个值的第二入口，得单独处理（也按来源取打码值）。
   // ★ 和注册页同款：输入框 placeholder 固定，已保存的值只出现在下面那行提示里
   //   （以前是把打码值塞进 placeholder，看着像已经填好了、其实是个空框）。
-  $("cf-remail_api_key_2").placeholder = "粘贴你的工具密钥";
+  $("cf-tool-key-2").placeholder = "粘贴你的工具密钥";
   renderKeyHintModal();
-  $("cf-remail_api_key").placeholder = "粘贴你的工具密钥";
+  $("cf-tool-key").placeholder = "粘贴你的工具密钥";
   renderKeyHint();
   $("cf-reg_proxy").value = CONFIG.proxy || "";
   renderProxyHint();
@@ -744,6 +755,30 @@ async function loadConfig() {
   // 账号加固开关：就是 harden_after_register，跟设置弹窗里那个是同一个值。
   $("cf-reg_harden").checked = !!CONFIG.harden_after_register;
   syncRegHarden();
+
+  // 半自动模式开关：就是 semi_auto，跟设置弹窗里那个是同一个值。
+  // ★ 放在 loadConfig 里而不是只在启动时跑：设置弹窗保存后也会重新 loadConfig，
+  //   这样两处的勾选状态不会各说各话。
+  $("cf-reg_semi_auto").checked = !!CONFIG.semi_auto;
+  syncRegSemiAuto();
+}
+
+/** 注册页那个「半自动模式」开关的联动提示。
+ *
+ *  这个开关最容易让人误会的地方是**它会让「后台运行」失效**（人得看得见窗口），
+ *  所以勾上时必须当面说清楚，别让用户以为设置被吃掉了。
+ */
+function syncRegSemiAuto() {
+  const on = $("cf-reg_semi_auto").checked;
+  const el = $("reg-semi-auto-hint");
+  if (el) {
+    el.textContent = on
+      ? "碰到人机验证时浏览器会停在那里等你点，点完自动接着跑；已自动关掉「后台运行浏览器」"
+      : "不勾选 = 被 Cloudflare 挑战时直接关掉浏览器换连接重试（需要住宅代理才稳）";
+  }
+  // 顺手把「设置」弹窗里那个同步过去，避免两处不一致。
+  const mirror = $("cf-semi_auto");
+  if (mirror) mirror.checked = on;
 }
 
 /** 注册页那个「注册后设密码并绑 2FA」开关的联动提示。 */
@@ -756,24 +791,19 @@ function syncRegHarden() {
     : "不勾选 = 账号没有密码，二次登录需要再取一次邮箱验证码";
 }
 
-/** 当前邮箱来源：sitepool（本站号池）或 remail（直连上游）。 */
+/** 邮箱来源：2026-10-18 起只有本站号池一种。 */
 function mailboxProvider() {
-  return String((CONFIG && CONFIG.mailbox_provider) || "sitepool").toLowerCase() === "sitepool"
-    ? "sitepool" : "remail";
+  return "sitepool";
 }
 
-/** 当前来源下那把密钥的打码值。
- *  按来源取是必须的：走本站号池时值存在 sitepool_tool_key、直连上游时在 remail_api_key，
- *  拿错一个去看会永远显示「还没填过」，用户以为自己填失败了。 */
+/** 那把密钥的打码值。站内密钥存在 sitepool_tool_key。 */
 function keyMask() {
-  return mailboxProvider() === "sitepool"
-    ? (CONFIG.sitepool_tool_key_mask || "")
-    : (CONFIG.remail_api_key_mask || "");
+  return (CONFIG && CONFIG.sitepool_tool_key_mask) || "";
 }
 
-/** 这把密钥落到哪个配置字段，同样取决于当前来源。 */
+/** 这把密钥落到哪个配置字段。 */
 function keyConfigField() {
-  return mailboxProvider() === "sitepool" ? "sitepool_tool_key" : "remail_api_key";
+  return "sitepool_tool_key";
 }
 
 function syncRegPhoneVerify() {
@@ -815,7 +845,7 @@ function maskProxy(url) {
  *  已保存的值只显示在这行提示里，输入框始终是空的（服务端只回打码值，界面拿不到原文）。
  *  留空 = 不改动，所以「保存密钥」按钮只在真的粘了新密钥时才生效。 */
 function renderKeyHint(extra) {
-  const el = $("hint-remail");
+  const el = $("hint-tool-key");
   if (!el) return;
   if (extra) {
     el.textContent = extra;
@@ -832,7 +862,7 @@ function renderKeyHint(extra) {
 /** 设置弹窗里那个工具密钥的提示：和注册页同款写法。
  *  那一格靠弹窗底部的「保存」落盘，所以提示里说的是点「保存」而不是「保存密钥」。 */
 function renderKeyHintModal() {
-  const el = $("hint-remail-modal");
+  const el = $("hint-tool-key-2");
   if (!el) return;
   const mask = keyMask();
   el.textContent = mask
@@ -858,7 +888,7 @@ function collectConfig() {
     if (typeof patch[key] === "string" && patch[key] === String(CONFIG[key] ?? "").trim()) delete patch[key];
   }
   // 设置弹窗里那个 Key 是同一个值的第二入口，落点和注册页共用 keyConfigField()。
-  const second = $("cf-remail_api_key_2").value.trim();
+  const second = $("cf-tool-key-2").value.trim();
   if (second) patch[keyConfigField()] = second;
   return patch;
 }
@@ -868,7 +898,7 @@ async function saveSettings() {
     const data = await api("/api/config", { method: "POST", body: collectConfig() });
     CONFIG = data.config || {};
     for (const key of CFG_SECRET) { const el = $("cf-" + key); if (el) el.value = ""; }
-    $("cf-remail_api_key_2").value = "";
+    $("cf-tool-key-2").value = "";
     await loadConfig();
     if (data.problems && data.problems.length) toast("已保存，但有问题：" + data.problems.join("；"), "bad");
     else toast("设置已保存", "ok");
@@ -917,8 +947,8 @@ async function persistRegisterFields() {
   };
   // 页面上已经没有邮箱目标选择器了，这里一律不回写 mailbox_target_id，
   // 免得把配置里那条（直连上游要用的）目标覆盖掉。
-  // 这一把密钥写进哪个字段取决于当前来源：本站号池 -> sitepool_tool_key；直连上游 -> remail_api_key。
-  const toolKey = $("cf-remail_api_key").value.trim();
+  // 这一把密钥固定写进 sitepool_tool_key。
+  const toolKey = $("cf-tool-key").value.trim();
   if (toolKey) patch[keyConfigField()] = toolKey;
 
   // 手机号验证是可选项：勾选状态本身就是开关，必须每次都写（取消勾选要能生效）。
@@ -927,6 +957,11 @@ async function persistRegisterFields() {
 
   // 账号加固同理：勾选状态本身就是开关，必须每次都写（取消勾选要能生效）。
   patch.harden_after_register = $("cf-reg_harden").checked;
+
+  // 半自动模式同理：勾选状态就是开关，必须每次都写。
+  // 服务端 validate() 会在它为真时把 headless 强制拉回 false，
+  // 所以回写之后 CONFIG 里的 headless 会变成 false —— 这是对的，不是 bug。
+  patch.semi_auto = $("cf-reg_semi_auto").checked;
 
   // ★ 代理是每一轮注册都要用的出口，和「要不要过手机号验证」无关，
   //   所以必须放在上面那个 if 外面 —— 以前塞在里面，不勾手机验证时清空代理根本存不下去，
@@ -939,7 +974,7 @@ async function persistRegisterFields() {
   const data = await api("/api/config", { method: "POST", body: patch });
   CONFIG = data.config || CONFIG;
   if (toolKey) {
-    $("cf-remail_api_key").value = "";
+    $("cf-tool-key").value = "";
     renderKeyHint();
   }
   return toolKey;
@@ -971,6 +1006,9 @@ const REG_STAGES = {
   liveness: [86, "检测账号有效性"],
   quota: [90, "查询生图额度"],
   activation: [94, "手机验证 / 激活"],
+  // 半自动模式专用：碰到人机验证，停下来等人手动点一下。
+  // 不占进度（沿用上一阶段的比例），但卡片上会明确写出「在等你」。
+  human: [30, "⏸ 等你手动过验证"],
   done: [100, "完成"],
 };
 
@@ -1106,19 +1144,21 @@ $("btn-stop").onclick = async () => {
 // 「注册后过手机号验证」只改右侧提示文案：号码和邮箱共用同一把工具密钥，没有额外输入框
 $("cf-reg_phone_verify").onchange = syncRegPhoneVerify;
 $("cf-reg_harden").onchange = syncRegHarden;
+// 半自动模式：勾选状态会即时落盘（在 persistRegisterFields 里），这里只同步提示与设置弹窗
+$("cf-reg_semi_auto").onchange = syncRegSemiAuto;
 
 // 工具密钥的显式保存。和代理同款：只写这一个字段，不动注册页其它值。
 // 空着点按钮不算「清空」—— 服务端只回打码值，空着本来就代表「不修改」，
 // 所以清空密钥这件事不放进这个按钮（免得手一滑把密钥弄没了）。
 $("btn-save-key").onclick = async () => {
-  const typed = $("cf-remail_api_key").value.trim();
+  const typed = $("cf-tool-key").value.trim();
   if (!typed) { toast("请先粘贴工具密钥", "bad"); return; }
   try {
     const patch = {};
     patch[keyConfigField()] = typed;
     const data = await api("/api/config", { method: "POST", body: patch });
     CONFIG = data.config || CONFIG;
-    $("cf-remail_api_key").value = "";
+    $("cf-tool-key").value = "";
     renderKeyHint("已保存。下一轮注册就用这把密钥。");
     toast("工具密钥已保存", "ok");
   } catch (err) { toast(err.message, "bad"); }

@@ -3,7 +3,7 @@
 
 为什么要这么改
 --------------
-原来小工具是拿着用户自己的 Remail Key / SMSBower Key 直连上游的：
+原来小工具是拿着用户自己的上游 Key 直连的：
 用户要自己去注册两个上游账号、自己充值、还要把密钥交给一个第三方小工具。
 改成本站号池之后，用户只需要在**站内**拿一把「工具密钥」：
 
@@ -64,6 +64,13 @@ _REASON_TEXT = {
     "ACCOUNT_POOL_IDEMPOTENCY_REQUIRED": "缺少 Idempotency-Key",
     "ACCOUNT_POOL_KIND_NOT_SUPPORTED": "该类型资源暂未开放",
     "ACCOUNT_POOL_INVALID_QUANTITY": "数量不合法",
+    # ★ 2026-10-11 新增：号池的「使用资格」门禁。
+    #   服务端要求「调号池的密钥必须绑定到工具分组」，没兑换过的用户拿不到这种密钥。
+    #   这条一定要翻成人话，否则小白看到的只是服务端那句原文，不知道去哪办。
+    "POOL_TOOL_GROUP_REQUIRED": (
+        "这把密钥没有「工具使用资格」—— 本站要求调用号池的密钥必须绑定到指定的工具分组。"
+        "请先在站内兑换使用资格，然后重新创建一把绑定该分组的密钥填进来"
+    ),
 }
 
 
@@ -73,6 +80,14 @@ class SitePoolError(RuntimeError):
 
 class SitePoolAuthError(SitePoolError):
     """密钥无效 / 未登录。"""
+
+
+class SitePoolLicenseRequired(SitePoolError):
+    """这把密钥没有使用资格（没兑换 / 没绑到工具分组）。
+
+    单独一个类型是给上层用的：`preflight.check_pool` 要把它显示成
+    「去站内兑换资格」而不是「连不上」—— 两者对用户的下一步动作完全不同。
+    """
 
 
 class SitePoolNoStock(SitePoolError):
@@ -175,7 +190,15 @@ class SitePoolClient:
             payload = None
 
         if response.status_code in (401, 403):
-            detail = _humanize("", (payload or {}).get("message") if isinstance(payload, dict) else "", response.status_code)
+            # ★ 2026-10-11：原来这里**把 reason 丢掉了**（只把 message 传给 _humanize），
+            #   于是服务端新增的错误码翻不出人话，用户只看到一句原文。
+            #   现在按 reason 分流：缺资格和密钥无效是完全不同的两件事，
+            #   用户要做的动作也不同，不能都塞进同一句话。
+            reason = str((payload or {}).get("reason") or "") if isinstance(payload, dict) else ""
+            message = str((payload or {}).get("message") or "") if isinstance(payload, dict) else ""
+            detail = _humanize(reason, message, response.status_code)
+            if reason == "POOL_TOOL_GROUP_REQUIRED":
+                raise SitePoolLicenseRequired(detail)
             if response.status_code == 401:
                 raise SitePoolAuthError(f"本站密钥无效或已停用（{detail}）")
             raise SitePoolError(detail)
@@ -371,6 +394,22 @@ class SitePoolClient:
 
         raise SitePoolTimeout(f"等待短信验证码超时（{timeout}s）：{last_error}")
 
+    def phone_cancel(self, order_id: str) -> dict:
+        """主动退掉一个还没取到码的号码单，返回退号/退款结论。
+
+        ★ 站内是「先探测、再退号、后退款」：它会先问上游有没有码 ——
+          上游已经有码就落库并释放号码（**不取消、不退款**，因为号码确实交付了），
+          确认还在等码才退号 + 把 ¥0.40 退回余额。重复调用幂等。
+
+        返回形如 ``{"order_id","status","cancelled","refunded","reason"[,"code"]}``。
+        """
+        order_id = str(order_id or "").strip()
+        if not order_id:
+            raise SitePoolError("号码订单号缺失")
+        return self._request(
+            "POST", f"/v1/pool/phone/orders/{order_id}/cancel", api_key=self.sms_key
+        )
+
 
 class SitePoolSmsClient:
     """把本站号码接口包装成和 :class:`core.sms.SmsClient` 一样的形状。
@@ -457,9 +496,33 @@ class SitePoolSmsClient:
         return
 
     def cancel(self, activation_id: str) -> None:
-        """本站没有面向用户的取消接口。
+        """换号时主动退号：明确告诉站里「这个号不要了」。
 
-        号码窗口到期仍未收到验证码时，服务端 worker 会主动去上游退号并把钱退回余额
-        （约 20 分钟内）。所以这里只记一条日志，不做假动作。
+        ★ 以前这里是空转（只打一条日志），代价不是钱而是**时间**：
+          每换一次号就把号码和白付的 ¥0.40 攥到窗口结束（最长 20 分钟），
+          号码还被占着不能给别人。2026-10-14 站内加了
+          ``POST /v1/pool/phone/orders/:id/cancel``：先探测上游有没有码
+          （有码就落库、不取消），确认没码才退号 + 全额退款。
+          SMSBower 对没收到码的号码是全额退的，所以换号的成本从此只剩几秒。
+
+        ★ 这里**永不抛异常**：它是在换号的重试循环里、已经失败之后调的，
+          清理动作不该把原始失败原因盖掉（调用方要看的是「这个号为什么不行」）。
+          即使这次没退掉，站内 worker 仍会在窗口内兜底退号退款。
         """
-        logger.info("[号池] 取消请求已忽略：未收到验证码的号码单会在窗口到期后由站内自动退款")
+        order_id = str(activation_id or "").strip()
+        if not order_id:
+            return
+        try:
+            data = self._client.phone_cancel(order_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[号池] 主动退号失败（不影响换号，站内会在窗口内兜底退款）：%s", exc
+            )
+            return
+        refunded = bool(data.get("refunded"))
+        cancelled = bool(data.get("cancelled"))
+        reason = str(data.get("reason") or "")
+        if cancelled or refunded:
+            logger.info("[号池] 已退号 order=%s 已退款=%s 说明=%s", order_id, refunded, reason)
+        else:
+            logger.info("[号池] 未退号 order=%s 说明=%s", order_id, reason)

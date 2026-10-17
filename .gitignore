@@ -1,19 +1,30 @@
-# ★ 运行时数据：真实账号、配置（含工具密钥）、日志 —— 永远不要提交
+# 运行时数据
 data/
 logs/
-
-# 浏览器内核缓存（约 600MB，做离线包时会拷进来）
+# 实测/调试产物。默认忽略，因为里面常有号码、验证码、出口 IP、代理串（含凭据）。
+# 2026-10-06 加：交接方实测留下的 artifacts/*-reuse-*.jsonl 就是这一类。
+artifacts/
+# ★ 浏览器内核缓存（约 600MB）。做开箱即用离线包时会被拷到这里，
+#   **绝对不能进版本库**（2026-10-06 补：之前漏了这条）。
 browser/
 
-# 打包 / 构建产物
-dist/
-dist-green/
+# 2026-10-06 从 core/ tools/ 挪出来的 19 个 .bak-* 旧备份（可丢弃）
+attic/
+
+# ★★ 内部资料，不进任何公开仓库（2026-10-11 加）。
+#   docs/  内部记录：代理供应商评估、发布就绪度、实测现场、发布记录
+#   tools/ 70+ 个一次性探针：写死本机路径，有的内嵌真实账号邮箱
+#   这两类**不随包发出**，但如果你在**本目录**里 git init 再 add .，它们会被提交。
+#   ⚠️ .gitignore 只能挡「还没提交过」的文件 —— 一旦提交过，历史里就删不掉了
+#      （要清得用 git filter-repo 重写历史）。所以宁可先挡上。
+docs/
+tools/
 dist-src/
-build/
 release/
-.cache/
-*.spec
-!build.spec
+
+# 密钥
+.env
+.env.*
 
 # python
 .venv/
@@ -21,15 +32,17 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# 本地备份 / 编辑器临时文件
-*.bak
-*.bak-*
-*~
-attic/
-
-# 密钥
-.env
-.env.*
+# 打包产物
+build/
+dist/
+# 绿色版产物 + 它下载的嵌入式 Python 缓存。
+# ★ 注意 `dist/` 匹配不到 `dist-green/`（目录名不同），必须单列。
+dist-green/
+.cache/
+release/
+# PyInstaller 自动生成的 spec 忽略掉，但 build.spec 是打包配置，必须保留
+*.spec
+!build.spec
 
 # os
 .DS_Store

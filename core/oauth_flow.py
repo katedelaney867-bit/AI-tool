@@ -28,6 +28,7 @@ import logging
 import random
 import threading
 import time
+import traceback
 from urllib.parse import urlparse
 
 # ★ 只为了「按类型」识别「上游没有号码」这个条件（见 _do_phone_verification_if_present
@@ -370,24 +371,44 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
             if not _is_mfa_challenge_page(driver):
                 time.sleep(0.4)
                 continue
-            result = driver.execute_script(r"""
+            # ★ 和密码分支同一个坑：只在 JS 里**打标记**，不把 DOM 元素返回给 Python。
+            #   execute_script 返回值里的 DOM 元素会被序列化成普通对象，拿回来再调
+            #   scrollIntoView()/click() 会报 "el.scrollIntoView is not a function"。
+            #   这里原来就是 `return {ok:true, input, button}`，而外层 except 是
+            #   **debug 级**，异常被彻底淹没 —— 于是 MFA 永远填不进去、激活一直卡在
+            #   挑战页直到超时，且日志里什么都看不到（2026-10-11 一并修掉）。
+            marked = driver.execute_script(r"""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
               && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
               && !el.disabled && !el.readOnly;
+            document.querySelectorAll('[data-grl-mfa-target]').forEach(el => el.removeAttribute('data-grl-mfa-target'));
             const form = [...document.querySelectorAll('form')].find(f => /\/mfa-challenge/i.test(f.getAttribute('action') || ''));
             if (!form) return {ok:false, reason:'missing_form'};
             const input = [...form.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"]')].find(visible);
             if (!input) return {ok:false, reason:'missing_code_input'};
             const button = [...form.querySelectorAll('button[type="submit"], button[data-dd-action-name="Continue"], button')].find(visible);
             if (!button) return {ok:false, reason:'missing_submit'};
-            return {ok:true, input, button};
+            input.setAttribute('data-grl-mfa-target', 'input');
+            button.setAttribute('data-grl-mfa-target', 'submit');
+            return {ok:true};
             """) or {}
-            if not result.get("ok"):
+            if not marked.get("ok"):
                 time.sleep(0.4)
                 continue
-            _human_type_text(driver, result.get("input"), code, clear=True)
+            try:
+                from selenium.webdriver.common.by import By
+                code_input = driver.find_element(By.CSS_SELECTOR, '[data-grl-mfa-target="input"]')
+                code_submit = driver.find_element(By.CSS_SELECTOR, '[data-grl-mfa-target="submit"]')
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[激活] 按标记取 MFA 输入/提交元素失败：%s", str(exc)[:140])
+                time.sleep(0.5)
+                continue
+            if not _set_value_verified(driver, code_input, code, label="MFA 验证码"):
+                logger.warning("[激活] MFA 验证码没能可靠填入，本轮不提交（避免白烧一次尝试）")
+                time.sleep(0.5)
+                continue
             human_delay("otp_input")
-            _human_click(driver, result.get("button"), label="codex_mfa_submit")
+            _human_click(driver, code_submit, label="codex_mfa_submit")
             logger.info("[激活] 已填写并提交 MFA 验证码：%s", email)
             wait_end = time.time() + 12
             while time.time() < wait_end:
@@ -396,9 +417,52 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
                 time.sleep(0.4)
             return True
         except Exception as exc:
-            logger.debug("[激活] MFA challenge 处理失败：%s", str(exc)[:160])
+            # ★ 原来是 debug 级：代码级错误会被彻底淹没（2026-10-11 教训：
+            #   DOM 元素跨边界那类 TypeError 就是这么藏了 5 天的）。
+            logger.warning("[激活] MFA challenge 处理失败：%s", str(exc)[:160])
             time.sleep(0.5)
     return False
+
+
+def _set_value_verified(driver, el, value: str, *, label: str = "输入值") -> bool:
+    """把 ``value`` 写进输入框并**回读校验**；键盘打字对不上就用 JS 原生 setter 重写一次。
+
+    ★ 为什么必须回读：密码和验证码都会被 React 受控输入抢跑
+      （验证码实测被抢跑成 ``169479`` → ``169497``，见 ``_human_type_text`` 的注释）。
+      密码打错的后果更重：登录失败，还可能把账号锁掉。
+      所以这里不信任「打过了」——一律回读；不一致就用 nativeInputValueSetter
+      直接写值并派发 input/change（和 ``_set_otp_value_via_js`` 同一套路）。
+    """
+    def _read() -> str:
+        try:
+            return str(el.get_attribute("value") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    try:
+        # chunk=False：一律逐字符，绝不允许「两个字符一组」。
+        _human_type_text(driver, el, value, clear=True, chunk=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[激活] %s键盘输入失败，改走 JS 写入：%s", label, str(exc)[:140])
+
+    current = _read()
+    if current == value:
+        return True
+
+    logger.warning("[激活] %s回读不一致（期望 %d 位，实际 %d 位），改用 JS 原生 setter 重写",
+                   label, len(value), len(current))
+    try:
+        driver.execute_script(r"""
+        const el = arguments[0], v = arguments[1];
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        if (setter) setter.call(el, v); else el.value = v;
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+        """, el, value)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[激活] JS 写入%s失败：%s", label, str(exc)[:140])
+        return False
+    return _read() == value
 
 
 def _fill_login_password_if_present(driver, email: str, timeout: int = 18) -> str | None:
@@ -413,10 +477,17 @@ def _fill_login_password_if_present(driver, email: str, timeout: int = 18) -> st
         if not _is_login_password_page(driver):
             time.sleep(0.4)
             continue
-        result = driver.execute_script(r"""
+        # ★ 只在 JS 里**打标记**，绝不把 DOM 元素返回给 Python。
+        #   execute_script 的返回值里 DOM 元素会被序列化成普通对象，
+        #   拿回来再调 scrollIntoView()/click() 只会报
+        #   "el.scrollIntoView is not a function"。
+        #   2026-10-11 实测：密码分支就是这么把整个激活搞挂的（异常还被外层
+        #   过宽的 except 吞成「未检测到邮箱输入框」，静默放弃激活）。
+        marked = driver.execute_script(r"""
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
           && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
           && !el.disabled && !el.readOnly;
+        document.querySelectorAll('[data-grl-pw-target]').forEach(el => el.removeAttribute('data-grl-pw-target'));
         const input = [...document.querySelectorAll('input[type="password"],input[name*="password" i],input[autocomplete="current-password"]')]
           .find(visible);
         if (!input) return {ok:false, reason:'missing_password_input'};
@@ -432,16 +503,32 @@ def _fill_login_password_if_present(driver, email: str, timeout: int = 18) -> st
           .filter(x => x.below)
           .sort((a,b) => a.dist - b.dist || a.idx - b.idx);
         if (!buttons.length) return {ok:false, reason:'missing_submit'};
+        input.setAttribute('data-grl-pw-target', 'input');
+        buttons[0].el.setAttribute('data-grl-pw-target', 'submit');
         buttons[0].el.scrollIntoView({block:'center'});
-        return {ok:true, reason:'password_targets', input, button: buttons[0].el};
+        return {ok:true, reason:'password_targets'};
         """) or {}
-        if not result.get("ok"):
-            logger.info("[激活] 登录密码页未找到输入/提交按钮：%s", result)
+        if not marked.get("ok"):
+            logger.info("[激活] 登录密码页未找到输入/提交按钮：%s", marked)
             time.sleep(0.5)
             continue
-        _human_type_text(driver, result.get("input"), password, clear=True)
+        # 用 Selenium 按标记取**真正的 WebElement**（不是 JS 返回的序列化对象）。
+        # 标记会被下一轮 JS 开头的清理语句去掉，这里不用管残留。
+        try:
+            from selenium.webdriver.common.by import By
+            password_input = driver.find_element(By.CSS_SELECTOR, '[data-grl-pw-target="input"]')
+            password_submit = driver.find_element(By.CSS_SELECTOR, '[data-grl-pw-target="submit"]')
+        except Exception as exc:  # noqa: BLE001
+            logger.info("[激活] 按标记取密码输入/提交元素失败：%s", str(exc)[:140])
+            time.sleep(0.5)
+            continue
+        if not _set_value_verified(driver, password_input, password, label="登录密码"):
+            # ★ 填不对就**不提交**：打错密码只会白烧一次尝试，还可能把账号锁掉。
+            logger.warning("[激活] 密码没能可靠填入登录框，本轮不提交，等页面变化后重试")
+            time.sleep(1.0)
+            continue
         human_delay("form", minimum=2.0, maximum=3.6)
-        _human_click(driver, result.get("button"), label="codex_password_submit")
+        _human_click(driver, password_submit, label="codex_password_submit")
         logger.info("[激活] 已填写并提交登录密码：%s", email)
         wait_end = time.time() + 12
         while time.time() < wait_end:
@@ -611,6 +698,17 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
         logger.info("[激活] 已选择账号，跳过邮箱登录")
         return
 
+    # ★ 2026-10-16 老板实测：「碰到人机验证我点一下刷新就正常了」。
+    #   选账号页点不动时也先刷新再点一轮 —— 以前直接往下走，接着就是
+    #   「未检测到手机号验证页 → 跳过手机步骤」→ 干等回调超时，
+    #   而页面后来其实自己走到了 add-phone（白白废掉一单）。
+    if _on_choose_account_page(driver):
+        from .browser_flow import reload_and_settle as _reload_and_settle
+        _reload_and_settle(driver, reason="选择账号页点了 5 轮仍没离开")
+        if _click_account_chooser_if_present(driver, email):
+            logger.info("[激活] 刷新后已选择账号，跳过邮箱登录")
+            return
+
     # 可能已经处于账号选择/授权页；如果有邮箱输入框则完整登录。
     # 非日本出口时按钮文案/顺序会变，不能按可见文字点“继续”，否则可能误点 Google。
     try:
@@ -644,6 +742,17 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
                 logger.warning("[激活] 提交邮箱后页面既没到密码页也没到验证码页")
                 _dump_clickables(driver, "激活-提交邮箱后未落位")
     except Exception as exc:
+        # ★ 必须区分两种情况，绝不能一律当成「页面上没有邮箱输入框」：
+        #   - 预期情况：页面已经不是邮箱登录页（已登录 / 已在下一步）→ 跳过邮箱登录
+        #   - 代码级错误（TypeError / AttributeError / ...）→ 真 bug，必须抛出去
+        #   2026-10-11 实测踩过：密码分支把 JS 返回的 DOM 元素当普通对象用，抛
+        #   TypeError，被这里吞成「未检测到邮箱输入框，可能已登录或进入下一步」并
+        #   return —— 激活静默放弃，而界面显示「正在等待授权确认」，
+        #   看起来像卡住，实际什么都没在跑，极难排查。
+        if isinstance(exc, (TypeError, AttributeError, NameError, KeyError, IndexError)):
+            logger.error("[激活] 邮箱/密码登录步骤出现代码级错误，不再静默放弃：\n%s",
+                         traceback.format_exc())
+            raise
         logger.info("[激活] 未检测到邮箱输入框，可能已登录或进入下一步：%s", str(exc)[:120])
         return
 
@@ -1155,12 +1264,29 @@ def _ensure_add_phone_input(driver, *, reason: str = ""):
 
 # 区号 → ISO 国家码。用来在填号之前先把国家选择器切对。
 # ★ 顺序很重要：按区号长度从长到短匹配，否则 "1" 会把 "1x" 开头的号码抢走。
+#
+# ★★ **凡是号池可能发给我们的国家，都必须在这张表里**（2026-10-15 补教训）。
+#   这张表不只是「显示用」：`_type_phone_with_keyboard` 用它算 `want`，
+#   拿 `want` 跟页面选中的区号比对，**不一致就拒绝用键盘打字**
+#   （因为号码框带格式化面具，按错误国家打会把好号打坏）。
+#   表里没有的国家 → `want` 是空串 → 那道守卫被绕过 → 页面没切对国家时
+#   它会照打完整 E.164，把号码打花。所以漏一个国家 = 那个国家的号全废。
+#   （2026-10-15 号池切「沙特优先」时发现 966 不在表里，就是这个洞。）
 _DIAL_TO_ISO = (
     ("1", "US"), ("7", "RU"), ("20", "EG"), ("27", "ZA"), ("30", "GR"), ("31", "NL"),
     ("33", "FR"), ("34", "ES"), ("39", "IT"), ("44", "GB"), ("48", "PL"), ("49", "DE"),
     ("52", "MX"), ("55", "BR"), ("57", "CO"), ("60", "MY"), ("62", "ID"), ("63", "PH"),
     ("65", "SG"), ("66", "TH"), ("81", "JP"), ("82", "KR"), ("84", "VN"), ("86", "CN"),
-    ("90", "TR"), ("91", "IN"), ("92", "PK"), ("95", "MM"), ("98", "IR"),
+    ("90", "TR"), ("91", "IN"), ("92", "PK"), ("94", "LK"), ("95", "MM"), ("98", "IR"),
+    # 号池在用的国家（2026-10-15 起 upstream_ref = dr:53|33）
+    ("966", "SA"), ("971", "AE"), ("234", "NG"), ("254", "KE"), ("880", "BD"),
+    ("380", "UA"),
+    # 2026-10-16 号池换成「看板推荐国家」（sms.fur.li 的 OpenAI 推荐列表）：
+    #   尼日利亚 234 / 巴西 55 / 喀麦隆 237 / 加纳 233 / 泰国 66 / 波兰 48 / 安哥拉 244
+    # 55/66/48 上面已有，这里补 237/233/244 —— 漏一个就是那个国家的号全废：
+    # _type_phone_with_keyboard 的守卫是 `if want and dial != want: 跳过`，
+    # 表里没有 → want 是空串 → 守卫被绕过 → 页面没切对国家时照打完整 E.164，把号码打花。
+    ("237", "CM"), ("233", "GH"), ("244", "AO"),
 )
 
 
@@ -1204,6 +1330,136 @@ def _dial_of(phone: str) -> str:
         if digits.startswith(dial):
             return dial
     return ""
+
+
+# 换号失败原因的中文标签（只用于日志与最终报错，让一轮跑完能一眼看懂）。
+#
+# ★ 为什么不在这里做任何止损（2026-10-15 改，老板问「怎么还是跑 3 个号就停」之后）：
+#   2026-10-03 的老规则是「连续 3 个号 fraud_guard → 整轮放弃」，理由是
+#   「继续换只是白占款（每个号 ¥0.40 要等 20 分钟才退）」。而 2026-10-15 起
+#   换号**立刻退号退款**（实测三个号一分钱没花），前提没了；
+#   2026-10-15 晚些改成的「同一个号段 3 次就停」也删掉了，因为它**挡在号池前面**：
+#   号池的号段黑名单门槛是 **5 次失败**（AccountPoolPhoneSectionMinSamples），
+#   而它还会在下单时主动避开已拉黑的号段（命中就退号重抽）。
+#   工具在第 3 个就停 ⇒ 号池永远攒不到 5 次 ⇒ 那个坏号段永远拉不黑 ⇒
+#   **每轮都重复烧同一个号段的 3 个号**，正是"看起来怎么都没用"的成因。
+#
+#   现在的分工：
+#     工具 = 把 max_retries（默认 12）个号试完 + 把每次失败原因写清楚；
+#     号池 = 按号段记账、够数拉黑、下单时换号段、按成功率/探索/轮转换国家。
+#   一轮全失败的成本只有时间（每个号下单即退，钱不花）。
+# ★★ 账号/会话级失效的页面文案（**换号无用**，必须立刻停）
+#
+# 2026-10-16 老板实测踩到：那个账号已经封了，页面上明明白白写着
+#
+#     Session ended  Your sign-in session is no longer valid.
+#     Please start over to continue.  Try again ...
+#
+# 而手机 OTP 提交那步把它归成 `phone_otp_not_accepted`（"提交后页面没动"）⇒
+# 判定成**号码**问题 ⇒ 接着又换了 3 个号；那 3 个号其实**都收到了码**
+# （日志里 `已收到手机验证码`），纯粹白买，还把号段的战绩统计污染成"失败"。
+#
+# 会话/账号失效换多少号都没用 —— 这是**账号级**结论，必须直接中止本轮激活。
+# 只匹配明确的账号/会话文案，不用 "suspicious"（那是号码风控那条，别混）。
+_ACCOUNT_DEAD_MARKERS = (
+    "session ended",
+    "session is no longer valid",
+    "session has expired",
+    "session expired",
+    "no longer valid",
+    "start over to continue",
+    "account has been deactivated",
+    "account was deactivated",
+    "account is deactivated",
+    "account has been suspended",
+    "account was suspended",
+    "account is suspended",
+    "account is temporarily suspended",
+    "temporarily suspended",
+    "account banned",
+    "permanently banned",
+    "violating our policies",
+    # ★★ 2026-10-17 00:49 生产实测补的（上一版漏了这条，白烧了一个号）：
+    #   `Authentication Error  You do not have an account because it has been
+    #    deleted or deactivated. If you bel...`
+    "deleted or deactivated",
+    "do not have an account",
+    "account has been deleted",
+    "account was deleted",
+    "account no longer exists",
+    # 兜底：`deactivated` 单独出现也是账号级（这版 UI 里它就是账号被停用的措辞）。
+    # 放最后 —— 前面的具体文案先命中，返回的 reason 更准、便于排查。
+    "deactivated",
+    "账号已被封",
+    "账号已停用",
+    "账号已被删除",
+    "会话已失效",
+    "登录状态已失效",
+)
+
+
+def _account_dead_reason(text: str) -> str:
+    """页面/错误文本里有没有「账号或会话已失效」的文案；命中的原文片段原样返回。"""
+    body = str(text or "").lower()
+    for marker in _ACCOUNT_DEAD_MARKERS:
+        if marker in body:
+            return marker
+    return ""
+
+
+def _phone_failure_label(err_text: str) -> str:
+    """把一次换号的失败文本归成一个人话标签。"""
+    text = str(err_text or "")
+    if _account_dead_reason(text):
+        # 放最前面：账号失效的原文里也可能出现别的关键词（比如 body 里带 code），
+        # 归错类就会让人以为"还是号码问题"。
+        return "账号已失效"
+    if "fraud_guard" in text or "suspicious behavior" in text:
+        return "风控拒号"
+    if "phone_number_in_use" in text or "已被使用" in text:
+        return "号码已被占用"
+    if "invalid_phone_code" in text:
+        return "验证码错误"
+    if "invalid_phone" in text:
+        return "号码无效"
+    if "phone_otp_not_accepted" in text or "still_code_page" in text:
+        return "提交后页面没动"
+    if "等待短信验证码超时" in text or "还没收到短信" in text:
+        return "号码收不到码"
+    if "add_phone_rejected" in text:
+        return "上游拒绝该号码"
+    if "whatsapp" in text.lower():
+        return "页面只给 WhatsApp 通道"
+    if "超时" in text or "timeout" in text.lower():
+        return "超时"
+    return "其他"
+
+
+def _phone_section_key(phone: str) -> str:
+    """号码的号段 = 去掉国际区号后的前 3 位（和号池服务端同一把尺子）。
+
+    只用于**日志与报错**（让一轮跑完能看出是哪几个号段在废）。
+    认不出区号时返回空串，调用方显示成「未知」。
+    """
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    dial = _dial_of(digits)
+    if not dial:
+        return ""
+    national = digits[len(dial):]
+    return national[:3] if len(national) >= 3 else ""
+
+
+def _tally_attempts(notes: list[tuple[str, str]]) -> list[tuple[str, str, int]]:
+    """把 [(号段, 原因)] 汇总成 [(号段, 原因, 次数)]，次数多的在前。
+
+    纯函数，好单测 —— 最后那句报错就是靠它把「12 个号到底怎么废的」说清楚的。
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for section, label in notes:
+        key = (section or "未知", label or "其他")
+        counts[key] = counts.get(key, 0) + 1
+    return [(section, label, n) for (section, label), n in
+            sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def _page_selected_dial(driver) -> str:
@@ -1320,6 +1576,18 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10, keyboard: bool = 
       '91': ['in', 'india'],
       '62': ['id', 'indonesia'],
       '7':  ['ru', 'russia'],
+      // ★ 与 Python 侧 _DIAL_TO_ISO 保持同步：号池在用的国家一个都不能少，
+      //   少了这一项，dialCode 反查不出来（只影响回读与日志，不改国家）。
+      '966': ['sa', 'saudi arabia'],
+      '971': ['ae', 'united arab emirates'],
+      '63': ['ph', 'philippines'],
+      // ★ 2026-10-16 号池换国家（看板推荐列表）后补齐，与 Python 侧 _DIAL_TO_ISO 同步：
+      '234': ['ng', 'nigeria'],
+      '237': ['cm', 'cameroon'],
+      '233': ['gh', 'ghana'],
+      '66': ['th', 'thailand'],
+      '48': ['pl', 'poland'],
+      '244': ['ao', 'angola'],
     };
     const optionDialCode = (opt) => {
       const text = String(opt?.textContent || opt?.label || opt?.value || '').replace(/\s+/g, ' ').trim();
@@ -1862,6 +2130,15 @@ def _wait_after_phone_send(driver, timeout: int = 12) -> str:
         if _is_phone_code_state(last):
             return 'code_page'
         body = str(last.get('bodyText') or '')
+        # ★★ 账号/会话失效优先于一切号码级判断（2026-10-16）：
+        #   号还没填/刚提交就先失效时，上游错误可能是别的词，别把账号问题当号码问题。
+        dead = _account_dead_reason(body)
+        if dead:
+            _dump_phone_debug(driver, last, 'account_dead')
+            raise RuntimeError(
+                f"account_dead: 账号或登录会话已失效（页面出现 {dead!r}），换号无用；"
+                f"页面原文={body[:240]}"
+            )
         # ★ 先看网络里 OpenAI 到底怎么回的 —— 这比猜页面状态准得多。
         upstream = _last_add_phone_error(driver)
         if upstream:
@@ -1918,6 +2195,14 @@ def _wait_after_phone_otp_submit(driver, timeout: int = 20) -> str:
             inputs = last.get('inputs') or []
             invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in inputs)
             body = str(last.get('bodyText') or '').lower()
+            # ★★ 先判「账号/会话已失效」：这是账号级结论，换号无用，
+            #   必须在判「验证码错/号无效」之前拦下来（2026-10-16 实测见函数上方注释）。
+            dead = _account_dead_reason(body)
+            if dead:
+                raise RuntimeError(
+                    f"account_dead: 账号或登录会话已失效（页面出现 {dead!r}），换号无用；"
+                    f"页面原文={str(last.get('bodyText') or '')[:240]}"
+                )
             if invalid or any(k in body for k in (
                 'invalid code', 'incorrect code', 'wrong code', 'expired code',
                 'code is invalid', 'code was invalid', '验证码无效', '验证码错误', '验证码已过期',
@@ -1955,6 +2240,9 @@ def _wait_after_phone_otp_submit(driver, timeout: int = 20) -> str:
 def _classify_phone_page_failure(state: dict) -> str:
     if _is_phone_code_state(state):
         return ''
+    # ★ 账号/会话失效优先：号还没填就先失效，换号同样无用（2026-10-16）
+    if _account_dead_reason(state.get('bodyText') or ''):
+        return 'account_dead'
     # WhatsApp 用 DOM radio value 判断；其它发送失败用服务端/页面错误文本兜底。
     radios = state.get('radios') or []
     if any('whatsapp' in str(r.get('value','')).lower().replace(' ', '') and r.get('checked') for r in radios):
@@ -2006,12 +2294,16 @@ def _do_phone_verification_if_present(
     *,
     max_retries: int = 5,
     code_wait: int = 120,
+    human_waiter=None,
 ) -> None:
     """如果授权流程要求手机号验证，则用接码平台自动完成。
 
     与原实现的差异仅在于接码调用方式：原实现直接使用 core.sms_provider 的模块级
     配置和 curl 会话，这里改为调用方传入的 core.sms.SmsClient，其余页面动作、
     换号重试与止损逻辑保持不变。
+
+    ``human_waiter(reason)`` 是**半自动模式**注入的「请人手动过验证」回调；
+    不传（默认 None）时本函数行为与以前**一模一样**。
     """
     if sms_client is None:
         logger.info("[激活] 未配置接码平台，跳过手机验证步骤")
@@ -2022,13 +2314,32 @@ def _do_phone_verification_if_present(
     #   （走代理时更慢），于是被判成「不是手机流程」跳过，接着在 add-phone 页
     #   干等到 callback 超时——注册明明成功了却拿不到凭证。
     try:
-        end_detect = time.time() + 35
-        while time.time() < end_detect and not _has_strict_add_phone_form(driver):
-            # 已经在验证码页，说明手机步骤之前提交过，继续处理验证码页。
-            if _is_phone_code_page(driver):
-                break
-            time.sleep(0.5)
-        if not (_has_strict_add_phone_form(driver) or _is_phone_code_page(driver)):
+        def _phone_page_present() -> bool:
+            return _has_strict_add_phone_form(driver) or _is_phone_code_page(driver)
+
+        def _wait_phone_page(seconds: float) -> None:
+            end_at = time.time() + seconds
+            while time.time() < end_at and not _phone_page_present():
+                time.sleep(0.5)
+
+        _wait_phone_page(35)
+        # ★★ 2026-10-16 老板实测：人机验证页「点一下刷新就回到正常页面」。
+        #   这里的 35 秒等不到 add-phone，最常见的两个原因是挑战页没渲染完、
+        #   或者 SPA 卡住 —— 先原地刷新一次再等一轮（不烧号：号码是探测**之后**才 acquire）。
+        if not _phone_page_present():
+            from .browser_flow import reload_and_settle as _reload_and_settle
+            _reload_and_settle(driver, reason="手机验证页 35 秒没渲染出来")
+            _wait_phone_page(25)
+        if not _phone_page_present():
+            # ★ 半自动：这里最可能踩到 Cloudflare 挑战页。以前的处理是走下面的
+            #   「未检测到手机号验证页 → 跳过手机步骤」，结果是**激活静默跳过了
+            #   手机验证**，交付出去的号是残缺的，而日志只留一句 INFO。
+            #   所以先请人手动过验证（不关浏览器），再重新探测一遍。
+            #   （号码是在这个探测**之后**才 acquire 的，所以这里还不会烧号。）
+            if human_waiter is not None:
+                human_waiter("手机验证页没渲染出来（多半被人机验证挡住了）")
+                _wait_phone_page(60)
+        if not _phone_page_present():
             raise RuntimeError("not_phone_flow")
     except Exception:
         try:
@@ -2039,7 +2350,8 @@ def _do_phone_verification_if_present(
         return
 
     last_err = None
-    fraud_streak = 0
+    # 每次都记一笔 (号段, 原因标签)：只用于最后那句报错，**不做任何止损**（见上面注释）。
+    attempt_notes: list[tuple[str, str]] = []
     for attempt in range(1, max_retries + 1):
         # ★ 用户在界面上点了「停止」要能立刻停住。
         #   这个换号循环以前不查停止标志，点停止之后还会继续烧号
@@ -2048,6 +2360,9 @@ def _do_phone_verification_if_present(
 
         check_stop()
         activation_id = None
+        # ★ 跟 activation_id 一样先置空：下面 except 里要用 phone 算号段，
+        #   而 acquire() 自己抛错时 phone 还没赋值 —— 不初始化就是 NameError。
+        phone = ""
         try:
             activation_id, phone = sms_client.acquire()
             logger.info("[激活] 手机验证尝试 %s/%s，平台=%s", attempt, max_retries, sms_client.label)
@@ -2153,6 +2468,13 @@ def _do_phone_verification_if_present(
                     "页面原文见上一条 WARNING 日志"
                 )
             logger.info("[激活] 手机 OTP 提交后状态：%s", outcome)
+            # ★ 2026-10-17：把「这一单真正吃下的号」挂到 driver 上，由调用方写进账号记录。
+            #   长效号（api.cc）不可退但**有效期 22 天**，能不能复用同一个号吃第二单，
+            #   是它成本能否压到近零的关键 —— 没有这个字段就永远统计不了。
+            try:
+                setattr(driver, "_grl_phone_accepted", phone)
+            except Exception:  # noqa: BLE001
+                pass
             sms_client.complete(activation_id)
             return
         except Exception as exc:
@@ -2177,20 +2499,28 @@ def _do_phone_verification_if_present(
                 raise RuntimeError(
                     "手机号流程进入 invalid_auth_step，授权状态未正常跳转，已停止继续换号"
                 ) from exc
-            # ★ 连续风控就止损：说明不是「这个号不行」，而是**这批号段整体被 OpenAI 风控了**，
-            #   换多少个号都一样。继续换只是白占款（每个号 ¥0.40 要等 20 分钟才退），
-            #   所以试几个之后直接停下，把真实原因报出来（2026-10-03 实测：21 点后
-            #   取号 38 次只有 2 个号收到码，全是 fraud_guard）。
-            if "fraud_guard" in err_text:
-                fraud_streak += 1
-                if fraud_streak >= 3:
-                    raise RuntimeError(
-                        "连续 3 个号都被 OpenAI 风控拒了（fraud_guard），"
-                        "说明当前号段/号码池整体不可用，继续换号也是白费。"
-                        "建议：换一个国家的号码商品，或者过一段时间再跑。"
-                    ) from exc
-            else:
-                fraud_streak = 0
+            # ★★ 账号/会话级失效：**立刻停**，别再买号（2026-10-16 老板实测）：
+            #   账号已封时页面写 "Session ended … no longer valid"，OTP 提交那步
+            #   会把它归成"提交后页面没动"，于是又换了 3 个号 —— 那 3 个号都收到了码，
+            #   纯浪费（还污染号段战绩）。会话失效换多少号都没用。
+            dead = _account_dead_reason(err_text) or ("account_dead" in err_text and "account_dead")
+            if dead:
+                raise RuntimeError(
+                    f"账号或登录会话已失效（{dead}），换号无用，已立即停止本轮激活"
+                    f"（本次已换 {attempt} 个号）：{err_text[:200]}"
+                ) from exc
+            # ★ 这里**只记一笔，不止损**（2026-10-15 老板口径：「跑满 12 个」）。
+            #   号段/国家的淘汰交给号池：它按号段记账（5 次失败拉黑）、
+            #   下单时主动避开黑名单号段、并按成功率+探索+轮转换国家。
+            #   工具提前停 = 号池攒不到样本 = 坏号段永远拉不黑。
+            section = _phone_section_key(phone)
+            label = _phone_failure_label(err_text)
+            attempt_notes.append((section or "未知", label))
+            logger.warning(
+                "[激活] 第 %s/%s 个号失败：%s · 号段 %s · 号码 %s（本次累计 %s）",
+                attempt, max_retries, label, section or "未知", phone or "?",
+                " ".join(f"{s}-{n}x{c}" for s, n, c in _tally_attempts(attempt_notes)),
+            )
             # 已经离开手机号相关页面说明通过了；否则下一轮回 add-phone 重新填号。
             try:
                 if _is_phone_code_page(driver):
@@ -2206,7 +2536,25 @@ def _do_phone_verification_if_present(
             if attempt < max_retries:
                 _refresh_add_phone_for_retry(driver, reason=str(exc)[:120])
             _sleep_before_phone_retry(attempt, max_retries, prefix="[激活]")
-    raise RuntimeError(f"手机验证重试 {max_retries} 次仍失败，最后错误：{last_err}")
+    # ★ 最后这句是给人看的**结论**，不是「白费」两个字：
+    #   说清 12 个号分别废在哪、以及下一步该动哪里（换出口 IP）。
+    if attempt_notes:
+        details = "、".join(f"{label} {n} 个（号段 {section}）"
+                          for section, label, n in _tally_attempts(attempt_notes))
+        sections = sorted({s for s, _ in attempt_notes})
+    else:
+        details, sections = "（一次都没取到号）", []
+    advice = (
+        "建议：① 先用界面上「代理」那一格换一个**住宅/原生出口**（现在走的是 Clash 的机房 IP，"
+        "机房 IP + 非本地号码最容易被 add-phone 风控）；"
+        "② 号池侧不用你管 —— 它按号段记账，同一号段废够数会自动拉黑并在下单时换号段，"
+        "国家也按成功率/探索/轮转自动切。"
+    )
+    raise RuntimeError(
+        f"换号 {max_retries} 次都没成功。本次明细：{details}"
+        f"（涉及号段 {'/'.join(s or '未知' for s in sections) or '无'}）。"
+        f"最后错误：{last_err}。{advice}"
+    )
 
 
 def _finish_consent_workspace(driver) -> str:

@@ -40,8 +40,9 @@ class AccountRecord:
     password: str = ""               # 注册流程中设置的 OpenAI 密码
     totp_secret: str = ""            # 绑定的 TOTP 2FA 密钥（base32，自己实现、不依赖 pyotp）
     recovery_codes: str = ""         # 2FA 恢复码（上游给了才填；换行分隔）
-    inbox_token: str = ""            # Remail 订单取件凭证，重取码/换绑时要用
+    inbox_token: str = ""            # 邮箱订单取件凭证，重取码/换绑时要用
     mailbox: str = ""                # 邮箱来源标识
+    phone: str = ""                  # 本单真正吃下的手机号（长效号可复用时靠它去重）
     proxy: str = ""
 
     liveness: str = "unknown"        # alive/dead/unknown
