@@ -33,7 +33,7 @@ OTP_MAX_ATTEMPTS = 3
 
 # ★「重新发送」到底值不值得点，实测分两套链路，结论完全相反（2026-10-04 统计全量日志）：
 #
-#   remail 直连时代：点 1 次 → 3 秒后拿到新码 → 注册成功        （22:58，1/1）
+#   直连上游 直连时代：点 1 次 → 3 秒后拿到新码 → 注册成功        （22:58，1/1）
 #   号池时代：      点 4 次 → 一封新码都没有，白烧 4×180s=12 分钟（20:45/20:48/18:48/18:51，0/4）
 #
 #   号池走的是 `GET /v1/pool/mail/orders/{id}/code`，只吐第一封的码，重发根本捞不到；
@@ -162,8 +162,14 @@ def _submit_otp_with_retries(
                 continue
 
         on_event("submit_otp", "已收到验证码，正在填写")
+        # ★ 2026-10-17：OTP 这几步各打一条耗时日志。起因：两次"收到码之后静默 18 分钟"
+        #   （最后等邮箱窗口过期），而这段路一行日志都没有 —— 无法判断卡在哪个调用。
+        otp_step_t0 = time.time()
         flow._clear_otp_inputs(driver)
+        logger.info("[注册][OTP] 清空旧码耗时 %.1fs", time.time() - otp_step_t0)
+        otp_step_t0 = time.time()
         flow._type_otp(driver, current_otp)
+        logger.info("[注册][OTP] 填入新码耗时 %.1fs", time.time() - otp_step_t0)
         human_delay("otp_input")
 
         # 新版验证码页可能在输入满 6 位后自动提交，先观察跳转，避免重复提交。
@@ -180,6 +186,7 @@ def _submit_otp_with_retries(
                 break
             time.sleep(0.5)
 
+        otp_step_t0 = time.time()
         if not auto_submitted:
             try:
                 # 优先点「验证」按钮：这个页面有「验证」和「重新发送」两个 type=submit，
@@ -188,8 +195,12 @@ def _submit_otp_with_retries(
                     flow._click_continue(driver)
             except Exception as exc:
                 logger.info("[注册] 未找到显式提交按钮，继续等待页面状态：%s", str(exc)[:120])
+        click_elapsed = time.time() - otp_step_t0
 
+        otp_step_t0 = time.time()
         outcome = "accepted" if auto_submitted else flow._wait_after_email_otp_submit(driver, timeout=12)
+        logger.info("[注册][OTP] 点击提交耗时 %.1fs、提交后等待 %.1fs → %s",
+                    click_elapsed, time.time() - otp_step_t0, outcome)
 
         if outcome == "accepted":
             return otp_after_ts
@@ -308,6 +319,66 @@ def _email_step_fatal(exc: BaseException) -> bool:
     """
     text = str(exc)
     return any(key in text for key in ("登录密码页", "auth_error", "auth/error", "已注册"))
+
+
+def _wait_for_human(
+    driver,
+    *,
+    emit: EventFn,
+    config: Config,
+    reason: str,
+    probe: Callable[[object], str],
+    want: tuple[str, ...] = ("ready",),
+    poll: float = 3.0,
+    beat: float = 15.0,
+    timeout: float | None = None,
+) -> str:
+    """ ★ 半自动模式的核心：**不退出浏览器**，把窗口留在屏幕上等人手动过验证。
+
+    为什么要这样设计（而不是继续「关掉浏览器换一条连接」）：
+
+    - 小白的痛点是**搞不到住宅代理**。而只要不退出浏览器，出口就是**他自己家的宽带 IP**
+      —— 本来就是干净的住宅，比任何买来的池子都稳；
+    - 人机验证是唯一**没法自动化**的环节，那就交给**人** —— 人比任何代理池都强；
+    - 关掉浏览器反而把这两条优势一起丢掉：IP 换了、人刚点完的验证也白点了。
+
+    ``probe`` 由调用方给：登录页用 ``flow._login_page_ready``，
+    提交邮箱之后的页面用「页面是不是空/卡住」——**不同阶段的「就绪」定义不一样**，
+    写死一个探测函数会让等待器在第二个场景里永远等不到。
+
+    返回最后一次 probe 的结果；命中 ``want`` 就是「人处理好了」。
+    超时返回最后结果，由调用方决定是判死还是继续换连接。
+    """
+    timeout = (float(timeout) if timeout is not None
+               else float(max(30, int(config.semi_auto_wait or 600))))
+    deadline = time.time() + timeout
+    emit("human", f"⏸ 需要你手动处理：{reason}")
+    emit("human", f"   请在浏览器窗口里完成人机验证，工具会一直等你（最多 {timeout}s）")
+    logger.warning("[注册] 半自动：等人手动处理（最多 %ss）—— %s", timeout, reason)
+
+    last = ""
+    last_beat = 0.0
+    while time.time() < deadline:
+        check_stop()
+        time.sleep(max(1.0, poll))
+        try:
+            last = str(probe(driver) or "")
+        except Exception as exc:  # noqa: BLE001
+            # 页面正在重渲染时探测会抛 —— 那是正常的，继续等
+            logger.debug("[注册] 半自动：探测失败（继续等）%s: %s", type(exc).__name__, exc)
+            continue
+        if last in want:
+            logger.info("[注册] 半自动：检测到页面已就绪（%s），接着跑自动流程", last)
+            emit("human", "✔ 验证已通过，继续自动注册")
+            return last
+        now = time.time()
+        if now - last_beat >= beat:
+            last_beat = now
+            emit("human", f"   仍在等你手动完成验证（还剩 {int(deadline - now)}s）")
+
+    logger.warning("[注册] 半自动：等了 %ss 仍未就绪（最后探测=%s）", timeout, last or "?")
+    emit("human", f"✘ 等了 {timeout}s 还没通过，这一轮作废")
+    return last
 
 
 def register_one(
@@ -445,6 +516,42 @@ def register_one(
                     continue
                 raise
 
+            # ★ 半自动模式：被挑战时**不退出浏览器**，把窗口留给用户手动过验证。
+            #   退出就等于「换掉出口 IP」+「丢掉用户刚点完的验证」，两次白费。
+            #
+            # ★★ 但必须**只在真的是人机验证页**时才等人。
+            #   实测踩到：失败是 `ERR_CONNECTION_CLOSED`（出口直接连不上 chatgpt.com），
+            #   那种页面**人也没法点** —— 如果照「页面没就绪」就等，会白等满
+            #   semi_auto_wait（默认 600s）× BROWSER_TRIES（8）= 80 分钟，
+            #   而且什么都没解决。等待只该用在「人真的能解决」的场景。
+            # ★★ 2026-10-16 老板实测：「碰到人机验证时我点击刷新就到了正常的邮箱验证码页面」。
+            #   ⇒ **先走最便宜的一条路：原地刷新**（半自动开不开都走，刷新不丢会话、
+            #     不用重开浏览器）。以前只有「半自动等人」和「关浏览器换连接」两条，
+            #     而 semi_auto 关着时只剩换连接 —— 把一个刷一下就能救的会话整个丢掉。
+            if verdict != "ready" and (verdict == "challenge"
+                                       or flow._looks_like_cloudflare_challenge(driver)
+                                       or flow._page_is_empty_and_stuck(driver)):
+                for reload_round in (1, 2):
+                    flow.reload_and_settle(
+                        driver,
+                        reason=f"登录页未就绪（{verdict}），自动刷新 {reload_round}/2",
+                    )
+                    verdict = flow._login_page_ready(driver)
+                    emit("navigate", f"刷新后登录页状态：{verdict}")
+                    if verdict == "ready":
+                        break
+
+            if (config.semi_auto
+                    and verdict != "ready"
+                    and flow._looks_like_cloudflare_challenge(driver)):
+                verdict = _wait_for_human(
+                    driver,
+                    emit=emit,
+                    config=config,
+                    reason="登录页被人机验证挡住了",
+                    probe=flow._login_page_ready,
+                )
+
             if verdict == "ready":
                 # 登录页干净，直接进提交邮箱。提交这一段也可能踩到「页面没渲染出来」，
                 # 那说明这条连接的出口也被拦了 —— 一起放进重试里。
@@ -463,6 +570,36 @@ def register_one(
                                       or "未进入密码页" in str(exc)
                                       or "未进入下一步" in str(exc)
                                       or flow._page_is_empty_and_stuck(driver)))
+                    # ★★ 先自动刷新一次再重试提交（2026-10-16 老板实测那条：刷新就正常了）。
+                    #   刷新失败才轮到「半自动等人」，最后才是「换连接」。
+                    if retryable and (flow._looks_like_cloudflare_challenge(driver)
+                                      or flow._page_is_empty_and_stuck(driver)):
+                        flow.reload_and_settle(driver, reason="提交邮箱后页面没有前进")
+                        try:
+                            flow._submit_email_and_wait_next(driver, inbox.email, attempts=3)
+                            check_stop()
+                            break
+                        except Exception:  # noqa: BLE001
+                            logger.warning("[注册] 自动刷新后重试提交邮箱仍失败")
+                    # 半自动：提交邮箱后页面又卡住，多半是挑战异步来的 ——
+                    # 先给用户一次手动机会，再去换连接（换连接会关掉浏览器，很贵）。
+                    if config.semi_auto and retryable and flow._looks_like_cloudflare_challenge(driver):
+                        if _wait_for_human(
+                            driver,
+                            emit=emit,
+                            config=config,
+                            reason="提交邮箱后页面没有前进（可能又弹了人机验证）",
+                            # 这一步的「就绪」不是「登录页就绪」——页面已经走到验证码页了，
+                            # 所以用「页面不是空的/没卡住」当判据。写死登录页探测会永远等不到。
+                            probe=lambda d: "ok" if not flow._page_is_empty_and_stuck(d) else "stuck",
+                            want=("ok",),
+                        ) == "ok":
+                            try:
+                                flow._submit_email_and_wait_next(driver, inbox.email, attempts=3)
+                                check_stop()
+                                break
+                            except Exception:  # noqa: BLE001
+                                logger.warning("[注册] 半自动：人工处理后重试提交邮箱仍失败")
                     if browser_try < BROWSER_TRIES and retryable:
                         logger.warning("[注册] 邮箱页不可用（URL=%s，原因=%s），"
                                        "判定出口被拦，换连接重试 %s/%s",
@@ -494,7 +631,7 @@ def register_one(
                     raise RuntimeError(
                         f"连着 {BROWSER_TRIES} 条连接都被 Cloudflare 拦下了。"
                         "当前代理框是空的，走的是本机系统代理（Clash 之类），"
-                        "它的出口 IP 一直被拦 —— 请在注册页填一条住宅代理再跑。"
+                        "这条出口现在被 Cloudflare 拦着 —— 换个节点、或稍等几分钟再跑。"
                     )
                 raise RuntimeError(
                     f"连着 {BROWSER_TRIES} 条连接都被 Cloudflare 拦下了，"

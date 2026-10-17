@@ -49,22 +49,17 @@ def _r(check_id: str, name: str, ok: bool, detail: str, hint: str = "",
 # ------------------------------------------------------------------ ① 密钥
 
 def check_key(config) -> dict:
-    provider = str(getattr(config, "mailbox_provider", "sitepool") or "sitepool").lower()
-    if provider == "sitepool":
-        key = str(getattr(config, "sitepool_tool_key", "") or "").strip()
-        if not key:
-            return _r("key", "工具密钥", False, "还没填",
-                      "到站内「自建号池」页创建一把密钥，复制后粘到上面那一格",
-                      fatal=True)
-        if len(key) < 20:
-            return _r("key", "工具密钥", False, f"看起来太短（{len(key)} 字符）",
-                      "整把复制，别漏字符", fatal=True)
-        return _r("key", "工具密钥", True, f"已填（{len(key)} 字符）", "")
-    key = str(getattr(config, "remail_api_key", "") or "").strip()
+    # 2026-10-18：邮箱来源只剩本站号池一种，这条检查不再分叉。
+    # （以前还有一条「直连外部邮箱上游」的分支，已随上游一起删掉。）
+    key = str(getattr(config, "sitepool_tool_key", "") or "").strip()
     if not key:
-        return _r("key", "Remail 密钥", False, "还没填",
-                  "当前邮箱来源是「直连上游」，需要填 Remail API Key", fatal=True)
-    return _r("key", "Remail 密钥", True, f"已填（{len(key)} 字符）", "")
+        return _r("key", "工具密钥", False, "还没填",
+                  "到站内「自建号池」页创建一把密钥，复制后粘到上面那一格",
+                  fatal=True)
+    if len(key) < 20:
+        return _r("key", "工具密钥", False, f"看起来太短（{len(key)} 字符）",
+                  "整把复制，别漏字符", fatal=True)
+    return _r("key", "工具密钥", True, f"已填（{len(key)} 字符）", "")
 
 
 # ------------------------------------------------------------- ② 浏览器内核
@@ -127,6 +122,18 @@ def check_pool(config) -> dict:
     try:
         client = sitepool.SitePoolClient(base, mail_key=key, timeout=20)
         data = client.balance()
+    except sitepool.SitePoolLicenseRequired as exc:
+        # ★ 「没资格」和「连不上」是两件事，用户的下一步动作完全不同，
+        #   不能都报成「连不上」—— 那会把人带去查网络，查半天查不出来。
+        #   而且这里必须 fatal：没资格的话注册第一步（下邮箱单）就会失败，
+        #   让他点「开始注册」只是白等。
+        return _r("pool", "号池余额", False, str(exc),
+                  "到站内兑换使用资格，再重新创建一把绑定该分组的「工具密钥」",
+                  fatal=True)
+    except sitepool.SitePoolAuthError as exc:
+        # 密钥无效同理：这是配置问题，不是网络问题。
+        return _r("pool", "号池余额", False, str(exc),
+                  "到站内「自建号池」页重新复制一把工具密钥", fatal=True)
     except Exception as exc:  # noqa: BLE001
         return _r("pool", "号池余额", False, f"连不上：{exc}",
                   "检查本机网络；如果开了代理，确认代理能访问本站")
@@ -191,13 +198,21 @@ def check_proxy(config) -> dict:
 
     hint = ""
     if payload.get("hosting") is True:
-        hint = ("★ 这个出口是**机房 IP**（hosting=true）。OpenAI 对机房 IP 风控很严，"
-                "注册大概率过不去 —— 请换成住宅代理。")
+        # ★ 2026-10-18 改口：原来这里写的是「机房 IP，注册大概率过不去」并把这一项
+        #   判成**不通过**（红叉）。这是**错的**，被自己的实测反复推翻：
+        #     ・同一条机房出口一天注册成功 30+ 个号（成功率 70%~86%）；
+        #     ・真正决定成败的是**号码质量/号段**和**时段**，不是出口是不是机房；
+        #     ・把这项判红，等于让用机场/Clash 的人（绝大多数用户）一进来就看到
+        #       「过不去」，然后不敢跑 —— 这是误导，不是保护。
+        #   所以：**只提示，不判红**。出口确实被拦时，注册流程自己会在日志里说。
+        hint = ("检测到这是机房/云厂商出口（hosting=true）。这不代表一定注册不了 —— "
+                "用机场或 Clash 的人多半是这个类型。可以先跑一单试试；"
+                "如果连续整单都在登录页被人机验证挡住，再换一条家宽/住宅出口。")
     elif not resolved:
-        hint = "当前是直连。国内直连基本过不了 OpenAI，建议填一条住宅代理。"
+        hint = "当前是直连（没走代理）。国内直连容易被拦，注册失败时优先加一条代理。"
 
-    ok = payload.get("hosting") is not True
-    return _r("proxy", "代理出口", ok, detail, hint)
+    # ★ hosting 只是**信息**，不是失败：只有「连不出去」才算这一项不通过。
+    return _r("proxy", "代理出口", True, detail, hint)
 
 
 # -------------------------------------------------------- ⑤ 真启动一次浏览器

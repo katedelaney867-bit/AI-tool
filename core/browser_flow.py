@@ -1027,6 +1027,31 @@ _CF_CHALLENGE_TITLES = (
     "momentaufnahme", "attendez",
 )
 
+# ★★ 2026-10-17 老板现场看到的这一页，**只看标题认不出来**：
+#
+#     auth.openai.com — Performing security verification
+#     This website uses a security service to protect against malicious bots.
+#     This page is displayed while the website verifies you are not a bot.
+#
+#   `document.title` 不是 "Just a moment"（实测显示的是域名），所以旧逻辑认不出它，
+#   表现成「登录页没有邮箱输入框」→ 直接换连接（很贵），而不是走「原地刷新」。
+#   所以补一组**正文标记**。
+_CF_CHALLENGE_BODY_MARKERS = (
+    "performing security verification",
+    "security verification",
+    "protect against malicious bots",
+    "verify you are human",
+    "verifying you are human",
+    "checking your browser",
+    "enable javascript and cookies",
+    "one more step",
+    "review the security of your connection",
+    "安全验证",
+    "正在验证您",
+    "人机验证",
+    "验证您是真人",
+)
+
 
 def _looks_like_cloudflare_challenge(driver) -> bool:
     """登录页是不是被 Cloudflare 挡在门外了。
@@ -1041,13 +1066,28 @@ def _looks_like_cloudflare_challenge(driver) -> bool:
     low = title.strip().lower()
     if not any(key in low for key in _CF_CHALLENGE_TITLES):
         # 标题还没变成 "Just a moment" 时，退一步看 Cloudflare 挑战页的特征：
-        # 挑战平台脚本/iframe，或者那句 "Enable JavaScript and cookies to continue"。
+        #   ① 挑战平台脚本 / Turnstile iframe
+        #   ② 正文里的 "Enable JavaScript and cookies…"（老版挑战页）
+        #   ③ ★ 2026-10-17 新增：正文标记（"Performing security verification" /
+        #      "protect against malicious bots" / "Verify you are human" …）——
+        #      那一版页面的 document.title **不是** "Just a moment"，
+        #      以前在这里就漏判了，结果被当成"没有邮箱输入框"直接换连接。
         try:
             marks = driver.execute_script(
-                "return !!(document.querySelector('script[src*=\"/cdn-cgi/challenge-platform\"]')"
-                " || document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
-                " || /enable javascript and cookies to continue/i.test(document.body"
-                " ? (document.body.innerText || '') : ''));"
+                """
+                const markers = (arguments[0] || []).map(m => String(m).toLowerCase());
+                const bodyEl = document.body;
+                const body = bodyEl ? String(bodyEl.innerText || '') : '';
+                const low = body.toLowerCase();
+                if (document.querySelector('script[src*="/cdn-cgi/challenge-platform"]')) return true;
+                if (document.querySelector('iframe[src*="challenges.cloudflare.com"]')) return true;
+                if (/enable javascript and cookies/i.test(low)) return true;
+                for (const m of markers) {
+                    if (m && low.indexOf(m) !== -1) return true;
+                }
+                return false;
+                """,
+                list(_CF_CHALLENGE_BODY_MARKERS),
             )
         except Exception:  # noqa: BLE001
             return False
@@ -1081,6 +1121,40 @@ def _page_is_empty_and_stuck(driver) -> bool:
         ))
     except Exception:  # noqa: BLE001
         return False
+
+
+# ★★ 等不到 OTP 输入框时，先**原地刷新**再等几轮（2026-10-16 老板实测）
+#
+# 老板原话：「我有时候还能看见碰到了人机验证，这时候我点击刷新就到了正常的
+# 邮箱验证码页面」。也就是说**刷新是恢复成本最低的一条路** ——
+# 而当时的代码只有两条：半自动等人（semi_auto 关着时没有）、或者
+# 「判定出口被拦 → 关掉浏览器换连接」（贵两个数量级，还要重来一遍注册）。
+OTP_RELOAD_ROUNDS = 1
+
+
+def reload_and_settle(driver, *, reason: str = "", settle: str = "challenge") -> None:
+    """原地刷新一次并等页面稳定。
+
+    ★ 用在「页面卡在人机验证/空白/等不到输入框」这类现场：
+      刷新比重开浏览器便宜得多，而且不丢已经建立的会话。
+      刷新失败就退回 `driver.get(当前 URL)`（SPA 的 hash 路由刷新可能不重载，
+      用 URL 直连更实在）。
+    """
+    url = ""
+    try:
+        url = str(getattr(driver, "current_url", "") or "")
+    except Exception:  # noqa: BLE001
+        url = ""
+    logger.warning("[恢复] %s → 原地刷新重试（url=%s）", reason or "页面异常", url or "?")
+    try:
+        driver.refresh()
+    except Exception:  # noqa: BLE001
+        try:
+            if url:
+                driver.get(url)
+        except Exception:  # noqa: BLE001
+            pass
+    human_delay(settle)
 
 
 def _login_page_ready(driver, timeout: int = 12) -> str:
@@ -1277,29 +1351,50 @@ def _type_otp(driver, code: str) -> None:
         raise RuntimeError("验证码为空，拒绝填写")
 
     # ★ 先等输入框渲染出来，别抢在 React 前面报错（实测踩过：拿到码 5 秒后就说找不到输入框）。
+    #   ★★ 2026-10-16 老板实测：人机验证页「点一下刷新就回到正常的邮箱验证码页」，
+    #   所以等不到输入框时**先原地刷新再等一轮**；以前直接抛错，上层判「出口被拦」→
+    #   关浏览器换连接（很贵，而且要重来一遍注册）。
     kind, targets = "", []
-    started = time.time()
-    deadline = started + OTP_INPUT_WAIT
-    left_count = 0
-    while time.time() < deadline:
-        kind, targets = _collect_otp_targets(driver, len(code))
-        if kind:
+    reload_round = 0
+    last_progress_log = 0.0
+    while True:
+        started = time.time()
+        deadline = started + OTP_INPUT_WAIT
+        left_count = 0
+        while time.time() < deadline:
+            kind, targets = _collect_otp_targets(driver, len(code))
+            if kind:
+                break
+            # ★ 2026-10-17：**每 5 秒打一行进度**。起因是两次"收到码之后静默 18 分钟"
+            #   （最后只能等邮箱取码窗过期），而这条路上原本**一行日志都没有**，
+            #   事后完全无法判断卡在哪个调用。有这行心跳，下次直接看它停在哪一秒、
+            #   当时 url 是什么、是不是停在挑战页。
+            waited = time.time() - started
+            if waited - last_progress_log >= 5.0:
+                last_progress_log = waited
+                logger.warning("%s[OTP] 仍在等验证码输入框：已等 %.0fs url=%s 挑战页=%s",
+                               _log_prefix(driver), waited,
+                               str(getattr(driver, "current_url", "") or "?")[:80],
+                               _looks_like_cloudflare_challenge(driver))
+            # 页面已经自动跳走（码其实填进去了）就别死等 —— 但要连续两次确认，
+            # 免得被一次瞬时抖动骗过去、把整步验证码跳过去。
+            if time.time() - started >= 4.0:
+                try:
+                    if _is_email_verification_page(driver):
+                        left_count = 0
+                    else:
+                        left_count += 1
+                        if left_count >= 2:
+                            logger.info("%s[OTP] 等待输入框期间页面已离开验证码页，按已通过处理",
+                                        _log_prefix(driver))
+                            return
+                except Exception:  # noqa: BLE001
+                    pass
+            time.sleep(0.6)
+        if kind or reload_round >= OTP_RELOAD_ROUNDS:
             break
-        # 页面已经自动跳走（码其实填进去了）就别死等 —— 但要连续两次确认，
-        # 免得被一次瞬时抖动骗过去、把整步验证码跳过去。
-        if time.time() - started >= 4.0:
-            try:
-                if _is_email_verification_page(driver):
-                    left_count = 0
-                else:
-                    left_count += 1
-                    if left_count >= 2:
-                        logger.info("%s[OTP] 等待输入框期间页面已离开验证码页，按已通过处理",
-                                    _log_prefix(driver))
-                        return
-            except Exception:  # noqa: BLE001
-                pass
-        time.sleep(0.6)
+        reload_round += 1
+        reload_and_settle(driver, reason="等不到 OTP 输入框（多半又弹了人机验证）")
 
     if kind == "single":
         els = targets

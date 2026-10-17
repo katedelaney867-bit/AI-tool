@@ -14,6 +14,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,13 @@ from core import paths as paths_mod  # noqa: E402
 #    老用户机器上已经下好的 ~/.cloakbrowser 会继续被沿用，不会让他重新下 150MB。
 BROWSER_CACHE_DIR = paths_mod.apply_runtime_env()
 
+# ---- 内核下载任务状态（2026-10-18：后台下载 + 轮询进度）----
+_KERNEL_LOCK = threading.Lock()
+_KERNEL_JOB: dict = {
+    "state": "idle", "started_at": 0.0, "finished_at": 0.0,
+    "error": "", "detail": "", "bytes": 0, "files": 0,
+}
+
 from core import store  # noqa: E402
 from core import settings as settings_mod  # noqa: E402
 from core.engine import engine  # noqa: E402
@@ -40,7 +48,7 @@ from core.imagegen import IMAGES_DIR  # noqa: E402
 from core.paths import data_dir, logs_dir, resource  # noqa: E402
 
 UI_DIR = resource("ui")
-SECRET_FIELDS = ("sitepool_tool_key", "remail_api_key", "sms_api_key", "cloak_license_key")
+SECRET_FIELDS = ("sitepool_tool_key", "sms_api_key", "cloak_license_key")
 
 APP_NAME = "AI 小工具"
 QUOTA_JOB = "quota"
@@ -87,7 +95,6 @@ class ConfigPatch(BaseModel):
     sitepool_base: str | None = None
     sitepool_tool_key: str | None = None
     sitepool_phone_sku: str | None = None
-    remail_api_key: str | None = None
     mailbox_target_id: str | None = None
     register_count: int | None = None
     concurrency: int | None = None
@@ -97,7 +104,9 @@ class ConfigPatch(BaseModel):
     page_load_timeout: int | None = None
     humanize: bool | None = None
     geoip: bool | None = None
-    remail_api_base: str | None = None
+    # 半自动模式：碰到人机验证不退出浏览器，等人手动过验证后继续自动填
+    semi_auto: bool | None = None
+    semi_auto_wait: int | None = None
     mailbox_service_mode: str | None = None
     mailbox_supply_policy: str | None = None
     mailbox_project: str | None = None
@@ -197,10 +206,10 @@ def update_config(patch: ConfigPatch) -> dict:
 
 
 def _mailbox_provider():
-    """按配置选邮箱来源：默认本站号池，也保留直连 Remail 的老路。
+    """按配置选邮箱来源：本版本只有本站号池一条路。
 
     构造逻辑统一放在 core.mailbox.build_from_config —— 后台引擎用的是同一个函数，
-    避免「加载目标能走本站、真注册却去打 Remail」这种两端漂移。
+    避免「列表能加载、真注册却报 Key 错」这种两端漂移。
     """
     config = settings_mod.load()
     from core import mailbox as mailbox_pkg
@@ -213,7 +222,7 @@ def _mailbox_provider():
 
 
 def _mailbox_call(fn):
-    """跑一次 Remail 调用，把异常翻译成小白看得懂的话。"""
+    """跑一次号池调用，把异常翻译成小白看得懂的话。"""
     from core.mailbox.base import MailboxError
 
     try:
@@ -228,7 +237,7 @@ def _mailbox_call(fn):
 
 @app.get("/api/mailbox/status")
 def mailbox_status() -> dict:
-    """读 Remail 账户状态（余额/额度），不发单。"""
+    """读号池账户状态（余额/额度），不发单。"""
     return {"ok": True, "status": _mailbox_call(lambda: _mailbox_provider().status())}
 
 
@@ -877,11 +886,12 @@ def preflight(deep: int = 0) -> dict:
 
 @app.post("/api/preflight/kernel")
 def preflight_download_kernel() -> dict:
-    """下载浏览器内核（首次运行要的那 ~150MB）。
+    """**启动**内核下载（不阻塞：真正的下载在后台线程里跑）。
 
-    ★ 这一步可能要几分钟。前端必须显示「正在下载，请耐心等」，
-      否则用户会当成卡死然后强杀进程。
-    已经就绪时直接返回，不会重复下载。
+    ★ 2026-10-18 改版原因（老板实测）：原来是同步下载，几分钟里这个请求一直挂着，
+      页面像死了、cmd 里也没有任何输出，客户不知道要等多久，只能强杀。
+      现在这里立刻返回，进度由 `GET /api/preflight/kernel` 提供，
+      后台线程每 10 秒打一行心跳日志（黑窗口里能看到）。
     """
     from core import preflight as preflight_mod
 
@@ -890,33 +900,145 @@ def preflight_download_kernel() -> dict:
         logger.info("[自检] 内核已就绪，跳过下载：%s", detail)
         return {"ok": True, "already": True, "detail": detail}
 
+    with _KERNEL_LOCK:
+        if _KERNEL_JOB["state"] == "downloading":
+            return {"ok": True, "downloading": True, "already": False,
+                    "detail": "已经在下载了，进度看 /api/preflight/kernel"}
+        _KERNEL_JOB.update({
+            "state": "downloading", "started_at": time.time(), "finished_at": 0.0,
+            "error": "", "detail": "", "bytes": 0, "files": 0,
+        })
+        thread = threading.Thread(target=_kernel_download_worker, name="kernel-download", daemon=True)
+        thread.start()
+    logger.info("[自检] 已启动内核下载（后台）-> %s", BROWSER_CACHE_DIR)
+    return {"ok": True, "started": True, "already": False}
+
+
+@app.get("/api/preflight/kernel")
+def preflight_kernel_status() -> dict:
+    """下载进度：状态 + 已下载字节 + 已用秒数。前端每 1.5 秒轮询一次。"""
+    from core import preflight as preflight_mod
+
+    with _KERNEL_LOCK:
+        snapshot = dict(_KERNEL_JOB)
+    ready_now, detail_now = preflight_mod.kernel_present()
+    size_bytes, files = _kernel_cache_size()
+    elapsed = 0.0
+    if snapshot["started_at"]:
+        end = snapshot["finished_at"] or time.time()
+        elapsed = max(0.0, end - snapshot["started_at"])
+    state = snapshot["state"]
+    if ready_now and state != "downloading":
+        state = "ready"
+    elif ready_now and state == "downloading" and snapshot["finished_at"]:
+        state = "ready"
+    return {
+        "ok": True,
+        "state": state,
+        "ready": ready_now,
+        "detail": detail_now,
+        "error": snapshot["error"],
+        "bytes": size_bytes,
+        "mb": round(size_bytes / 1024 / 1024, 1),
+        "percent": snapshot.get("percent", 0),
+        "total_mb": snapshot.get("total_mb", 0.0),
+        "files": files,
+        "elapsed_seconds": round(elapsed, 1),
+    }
+
+
+def _kernel_cache_size() -> tuple[int, int]:
+    """内核缓存目录当前的大小（字节）和文件数 —— 这就是「下载进度」。"""
+    total = 0
+    files = 0
+    try:
+        # ★ BROWSER_CACHE_DIR 是 str（apply_runtime_env 的返回值），先 Path 兜一下
+        for path in Path(BROWSER_CACHE_DIR).rglob("*"):
+            if path.is_file():
+                try:
+                    total += path.stat().st_size
+                    files += 1
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return total, files
+
+
+
+# ---- 内核下载的真实进度（2026-10-18）----
+# cloakbrowser.download 自己会打 `Download progress: 42% (63/150 MB)`，
+# 但那个 logger 没人收，全被丢掉了 —— 客户那边 cmd 一片安静，就是这个原因。
+_KERNEL_PROGRESS_RE = re.compile(r"Download progress:\s*(\d+)%\s*\((\d+)/(\d+)\s*MB\)")
+_KERNEL_DONE_RE = re.compile(r"Download complete:\s*(\d+)\s*MB")
+
+
+class _KernelProgressHandler(logging.Handler):
+    """把下载库的进度日志翻译成可查询的进度 + 我们也打一份到自己的日志里。"""
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D401
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001
+            return
+        match = _KERNEL_PROGRESS_RE.search(message)
+        if match:
+            percent, done_mb, total_mb = (int(x) for x in match.groups())
+            with _KERNEL_LOCK:
+                _KERNEL_JOB.update({
+                    "percent": percent,
+                    "mb": float(done_mb),
+                    "total_mb": float(total_mb),
+                    "bytes": done_mb * 1024 * 1024,
+                })
+            logger.warning("[自检] 内核下载进度：%d%%（%d/%d MB）", percent, done_mb, total_mb)
+            return
+        done = _KERNEL_DONE_RE.search(message)
+        if done:
+            with _KERNEL_LOCK:
+                _KERNEL_JOB.update({"percent": 100, "mb": float(done.group(1))})
+            logger.warning("[自检] 内核下载完成，开始解压：%s", message)
+            return
+        if "Downloading from" in message or "Extracting" in message:
+            logger.warning("[自检] %s", message)
+
+
+def _install_kernel_progress_logger() -> None:
+    """挂一次就够（幂等）。"""
+    target = logging.getLogger("cloakbrowser.download")
+    target.setLevel(logging.INFO)
+    if any(isinstance(h, _KernelProgressHandler) for h in target.handlers):
+        return
+    handler = _KernelProgressHandler(level=logging.INFO)
+    target.addHandler(handler)
+
+def _kernel_download_worker() -> None:
+    """后台下载内核：每 10 秒打一行心跳，结束（成功/失败）都落状态。"""
+    from core import preflight as preflight_mod
+
+    _install_kernel_progress_logger()
+    started = time.time()
+    last_beat = 0.0
     try:
         from cloakbrowser.download import ensure_binary
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500,
-                            detail=f"cloakbrowser 不可用，无法下载内核：{exc}") from exc
 
-    logger.info("[自检] 开始下载浏览器内核 -> %s", BROWSER_CACHE_DIR)
-    try:
-        path = ensure_binary(
-            license_key=str(settings_mod.load().cloak_license_key or "").strip() or None,
-        )
+        logger.warning("[自检] 开始下载浏览器内核（约 150MB，可能几分钟）-> %s", BROWSER_CACHE_DIR)
+        license_key = str(settings_mod.load().cloak_license_key or "").strip() or None
+        path = ensure_binary(license_key=license_key)
+        ready, detail = preflight_mod.kernel_present()
+        if not ready:
+            raise RuntimeError("下载流程结束但没找到内核（可能被安全软件拦了）")
+        with _KERNEL_LOCK:
+            _KERNEL_JOB.update({"state": "ready", "finished_at": time.time(),
+                                "detail": detail, "error": ""})
+        size_bytes, files = _kernel_cache_size()
+        logger.warning("[自检] 内核下载完成：%s（%.1f MB / %d 文件，用时 %.0f 秒）-> %s",
+                       detail, size_bytes / 1024 / 1024, files, time.time() - started, path)
     except Exception as exc:  # noqa: BLE001
+        with _KERNEL_LOCK:
+            _KERNEL_JOB.update({"state": "failed", "finished_at": time.time(),
+                                "error": str(exc)[:400]})
         logger.warning("[自检] 内核下载失败：%s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail=("下载内核失败：" + str(exc)[:300] +
-                    "。常见原因：网络不通（主源 cloakbrowser.dev，回退 GitHub）、"
-                    "被安全软件拦截、磁盘空间不够。可换网络后重试。"),
-        ) from exc
-
-    ready, detail = preflight_mod.kernel_present()
-    if not ready:
-        raise HTTPException(status_code=502,
-                            detail="下载流程结束但没找到内核，请重试或换网络")
-    logger.info("[自检] 内核就绪：%s -> %s", detail, path)
-    return {"ok": True, "already": False, "detail": detail, "path": str(path)}
-
 
 # ------------------------------------------------------------------ 启动
 

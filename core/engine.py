@@ -222,7 +222,7 @@ class RegistrationEngine:
             from . import mailbox as mailbox_pkg
 
             # 走共用的构造路径，别在这里硬编码来源 ——
-            # 否则「加载目标」走本站、真注册却去打 Remail，用户只会看到莫名其妙的 Key 错。
+            # 否则「列表能加载、真注册却报 Key 错」，用户只会看到莫名其妙的问题。
             return mailbox_pkg.build_from_config(config)
         except Exception as exc:
             self.log(f"邮箱来源初始化失败：{type(exc).__name__}: {exc}", level="error")

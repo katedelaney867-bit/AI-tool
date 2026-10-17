@@ -3,7 +3,7 @@
 
 设计目标是把小白要填的东西压到最少。主界面只有 5 项：
 
-    1. Remail API Key
+    1. 工具密钥（本站号池）
     2. 邮箱目标（下拉，自动列出后缀/库存/单价）
     3. 注册数量
     4. 并发数
@@ -23,13 +23,21 @@ from .paths import data_dir
 
 logger = logging.getLogger(__name__)
 
-# 与 core/mailbox/remail.py 的校验保持一致，界面下拉不许出现别的值。
+# 与 core/mailbox/ 各来源的校验保持一致，界面下拉不许出现别的值。
 MAILBOX_MODES = {"purchase", "code"}
 MAILBOX_POLICIES = {"public_only", "private_first"}
-# 邮箱来源：sitepool = 本站号池（站内发密钥、站内计费）；remail = 直连上游
-MAILBOX_PROVIDERS = {"sitepool", "remail"}
-# 接码来源：sitepool = 本站号池；smsbower / grizzly = 直连上游
-SMS_PROVIDERS = {"sitepool", "smsbower", "grizzly"}
+# 邮箱来源：**只有** sitepool = 本站号池（站内发密钥、站内计费）。
+# 2026-10-18 把「直连外部邮箱上游」那条路整体删了：站内邮箱是加价卖的，
+# 让用户看到上游是谁、卖多少钱等于给别人引流。
+MAILBOX_PROVIDERS = {"sitepool"}
+# 接码来源：sitepool = 本站号池；smsbower / grizzly = 直连上游；
+# miaoic = miaoic.shop 的**网页接口**（不是 SMS-Activate handler API，见 core/miaoic.py）
+SMS_PROVIDERS = {"sitepool", "smsbower", "grizzly", "miaoic", "shortcode", "fivesim", "apicc"}
+
+# miaoic.shop 的接口地址。★ 它**只有 HTTP，没有 TLS**（对方的现状，不是我们的选择），
+# 所以填进去的 Token 是明文过公网的 —— 别拿它当账号，用按次充值的那把。
+# 侦察报告：D:\sub2api\artifacts\miaoic-recon-20261012\MIAOIC-RECON.md
+MIAOIC_DEFAULT_BASE = "http://miaoic.shop"
 
 # 本站号池的出厂接口地址。★ 换域名只改这一行（core/sitepool.py 的 DEFAULT_BASE_URL
 # 故意留空，不再有第二份默认值，免得两处漂移）。
@@ -59,7 +67,6 @@ class Config:
     #   表现是邮箱全正常、只有取号 401，极难排查。合并成一把就没有这个面了。
     sitepool_tool_key: str = ""
     sitepool_phone_sku: str = ""
-    remail_api_key: str = ""
     mailbox_target_id: str = ""
     register_count: int = 1
     concurrency: int = 1
@@ -72,12 +79,26 @@ class Config:
     humanize: bool = True
     geoip: bool = True
 
+    # ---- 半自动模式（给「搞不到住宅代理」的小白）----
+    # ★ 碰到 Cloudflare 挑战时**不退出浏览器**，而是把窗口留在屏幕上等人手动过验证，
+    #   过完工具接着把邮箱 / 邮箱验证码 / 手机号 / 手机验证码全自动填完。
+    #
+    #   为什么这样反而解决了代理问题：
+    #   - 出口变成**用户自己家的宽带 IP**（本来就是干净住宅，比买来的池子稳）；
+    #   - 唯一无法自动化的环节（人机验证）交给**人** —— 人比任何代理池都强；
+    #   - 于是「没有住宅代理」不再是小白的死门槛。
+    #
+    #   ⚠️ 与 `headless` 互斥：人要在屏幕上点验证，后台跑就没意义了。
+    #      validate() 会在开了半自动时把 headless 强制拉回 False。
+    semi_auto: bool = False
+    #: 等人处理的最长秒数。超时才算这一轮失败（默认 10 分钟，够泡杯茶）。
+    semi_auto_wait: int = 600
+
     # ---- 高级：邮箱 ----
-    remail_api_base: str = "https://remail.aishop6.com"
     mailbox_service_mode: str = "purchase"
     mailbox_supply_policy: str = "public_only"
     otp_timeout: int = 180
-    # Remail 有 60+ 个项目，全量拉一遍要几十秒。默认只拉 chatgpt 项目的
+    # 邮箱上游有 60+ 个项目，全量拉一遍要几十秒。默认只拉 chatgpt 项目的
     # outlook.com 后缀 —— 注册 ChatGPT 要的就是这个。
     # （走本站号池时这两个过滤项不生效，见 mailbox/sitepool.py 的说明）
     mailbox_project: str = "chatgpt"
@@ -98,9 +119,39 @@ class Config:
     enable_activation: bool = False
     sms_provider: str = "sitepool"
     sms_api_key: str = ""
+    # 走 miaoic 时，sms_api_key 里放的是它的 **Token**（32 位十六进制），不是 API Key。
+    # 地址是产品内置的：它是别家的小站，换域名只改这一行。
+    miaoic_base: str = MIAOIC_DEFAULT_BASE
+    # 走 shortcode（「短效接码」token 访问页，如 longnotes.cn/m/<token>）时填这个完整链接。
+    # 这类页面是转售商自封装的：一个 token 一个号码、换号次数有限，
+    # 所以工具默认**复用页面上已经拿到的号**，不白烧次数。
+    shortcode_url: str = ""
     sms_service: str = "dr"
     sms_country: str = "10"
     sms_max_price: str = ""
+    # ---- 5SIM 专用（2026-10-16 加）----
+    # 5SIM 的下单路径是 /v1/user/buy/activation/{国家}/{运营商}/{产品}，
+    # 所以国家和运营商是**名字**（indonesia/colombia/philippines…），不是数字 ID。
+    # operator 默认 any = 让平台挑最便宜的可用运营商；实测本账户 virtual34 报
+    # no free phones，能买到的是 virtual53/58/66/51。
+    fivesim_country: str = "indonesia"
+    fivesim_operator: str = "any"
+    fivesim_product: str = "openai"
+    # ---- api.cc 长效卡号（2026-10-17 加）----
+    # token 放通用字段 sms_api_key（跟 miaoic 一样，那一格填的是 Token 不是 Key）；
+    # 这里只放平台侧参数。
+    #   app_id：项目 ID。912 = 加拿大 ChatGPT-OpenAI（$0.030/个、库存 7.2 万）
+    #   prefixes：号段白名单，逗号分隔、按顺序轮着买 —— **唯一的质量手段**
+    #            （买了不能退不能换，只能靠选号段）。空 = 让平台自己挑。
+    #   expiry：0=随机 1=5-30天 2=10-30天 … 6=>80天（1 优惠 10%，6 加价 10%）
+    apicc_app_id: int = 912
+    apicc_prefixes: str = ""
+    apicc_expiry: int = 0
+    # ★ 只给「长效号能不能吃第二单」的实验用：填了号码就**不买新号**、直接复用
+    #   本地号表 `data/apicc_numbers.json` 里那些号的接码链接（旧码会被忽略）。
+    #   留空 = 正常产线（每次都买新号）。之所以做成配置项：工具是长驻进程，
+    #   靠环境变量传不进已启动的服务。
+    apicc_pin_numbers: str = ""
     sms_max_retries: int = 5
     sms_code_wait: int = 120
     oauth_timeout: int = 300
@@ -161,16 +212,11 @@ class Config:
                     "号码那把被丢弃。若取号报 401，请到设置里确认工具密钥。"
                 )
 
-        # ★ 老配置的向后兼容：老版本没有 mailbox_provider 这个字段，
-        # 而那批用户填的是 remail_api_key。新版本的默认值是 sitepool，
-        # 如果不做推断，老用户一升级就会被要求填「本站邮箱密钥」——
-        # 校验直接卡住，他完全不知道发生了什么。
-        # 规则：没写 provider 时，谁有密钥就走谁；都没有则用新默认（本站号池）。
+        # ★ 老配置的向后兼容：老版本没有 mailbox_provider 这个字段。
+        # 2026-10-18 起邮箱来源只有本站号池一种，所以直接补上默认值 ——
+        # 老配置里那些指向外部上游的残留键在 from_dict 里会被忽略（不再认识它们）。
         if "mailbox_provider" not in raw:
-            if clean.get("sitepool_tool_key", "").strip():
-                clean["mailbox_provider"] = "sitepool"
-            elif clean.get("remail_api_key", "").strip():
-                clean["mailbox_provider"] = "remail"
+            clean["mailbox_provider"] = "sitepool"
         if "sms_provider" not in raw and clean.get("sms_api_key", "").strip():
             clean["sms_provider"] = "smsbower"
 
@@ -179,6 +225,9 @@ class Config:
         #   在这里补回出厂地址，保证 load() 出来的 Config 一定是可用的。
         if not str(clean.get("sitepool_base", "") or "").strip():
             clean["sitepool_base"] = SITEPOOL_DEFAULT_BASE
+        # 同理：miaoic 的地址也不该因为老配置里没有这个键就变成空串。
+        if not str(clean.get("miaoic_base", "") or "").strip():
+            clean["miaoic_base"] = MIAOIC_DEFAULT_BASE
 
         return cls(**clean)
 
@@ -196,13 +245,22 @@ class Config:
         if self.sms_provider not in SMS_PROVIDERS:
             self.sms_provider = "sitepool"
 
+        # 半自动模式要在屏幕上点验证 —— 后台跑就没意义了。直接纠正而不是报错：
+        # 让用户去两个地方分别改，只会把他堵在门口。
+        if self.semi_auto and self.headless:
+            self.headless = False
+            logger.info("[配置] 开了「半自动模式」，已自动关闭「后台运行浏览器」"
+                        "（人要在屏幕上完成人机验证）")
+        if self.semi_auto_wait < 30:
+            self.semi_auto_wait = 30
+
         # 老版本的 config.json 里 sitepool_base 是空串（那时候界面上有一格让它填）。
         # 空着会让用户点号池直接报错，所以这里补回出厂地址 —— 这个键对用户是隐藏的，
         # 不该因为历史遗留把小白堵在门口。
         if self.mailbox_provider == "sitepool" and not self.sitepool_base.strip():
             self.sitepool_base = SITEPOOL_DEFAULT_BASE
 
-        # 密钥要求按来源分别检查 —— 走本站号池时 Remail Key 根本用不上，
+        # 密钥要求按来源分别检查 —— 只有本站号池这一条路，密钥也只要一把，
         # 还去要它只会把用户堵在门口。
         # ★ 站内密钥只有一把，所以只要**有一条链路**走本站号池，就要它：
         #   邮箱走号池、或者（邮箱不走但）号码走号池 + 开了手机验证。
@@ -211,9 +269,6 @@ class Config:
         )
         if needs_tool_key and not self.sitepool_tool_key.strip():
             problems.append("请填写「工具密钥」（在站内「自建号池」页创建并复制）")
-
-        if self.mailbox_provider != "sitepool" and not self.remail_api_key.strip():
-            problems.append("请填写 Remail API Key")
 
         # 本站号池只有一个在售邮箱商品，目标是自动定的，不该再拿「请选择邮箱目标」堵人。
         if self.mailbox_provider != "sitepool" and not self.mailbox_target_id.strip():
@@ -233,8 +288,17 @@ class Config:
         if self.liveness_concurrency > 8:
             self.liveness_concurrency = 8
 
-        if self.enable_activation and self.sms_provider != "sitepool" and not self.sms_api_key.strip():
-            problems.append("开启「ChatGPT 桌面端激活」后需要填写接码平台 API Key")
+        if self.enable_activation and self.sms_provider == "shortcode":
+            # 这类页面的凭证就是那条完整链接本身，没有 API Key 那一格
+            if not str(self.shortcode_url or "").strip():
+                problems.append("走「短效接码」时，要填它的访问页链接（https://…/m/<token>）")
+        elif self.enable_activation and self.sms_provider != "sitepool" and not self.sms_api_key.strip():
+            # miaoic 里这一格填的是 Token，不是 API Key —— 提示语要跟着变，
+            # 否则用户会去它站上找「API Key」而那里根本没有这东西。
+            if self.sms_provider == "miaoic":
+                problems.append("走 miaoic 时，「接码平台 API Key」这一格请填它的 Token（32 位十六进制）")
+            else:
+                problems.append("开启「ChatGPT 桌面端激活」后需要填写接码平台 API Key")
         return problems
 
 

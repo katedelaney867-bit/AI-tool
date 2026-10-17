@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """邮箱 provider 抽象。
 
-新项目只接 Remail 一家，但接口按多来源设计：以后要加自建 Cloudflare Worker
+目前只接本站号池一家，但接口按多来源设计：以后要加自建来源
 临时邮箱或 Outlook 池，只需要新增一个实现类并注册，GUI 不用改。
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ class MailboxProvider(ABC):
         ``available``（可用库存）、``price``（单价）字段。
 
         ``project_filter`` / ``suffix_filter`` 是逗号分隔的关键词，用来收窄结果。
-        对 Remail 这种上游，带上项目名能少发几十个请求，GUI 默认就带。
+        对号池这种上游，带上项目名能少发几十个请求，GUI 默认就带。
         两个参数都留空表示「全都要」（慢，但完整）。
         """
 

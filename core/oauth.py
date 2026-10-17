@@ -6,7 +6,7 @@
     生成 PKCE + state
       → 清掉浏览器里注册留下的登录态
       → 打开 auth.openai.com 授权页
-      → 邮箱登录 + 邮箱 OTP（复用 Remail 订单取件）
+      → 邮箱登录 + 邮箱 OTP（复用本单的邮箱订单取件）
       → 手机号验证（接码平台，页面要求时才做）
       → consent / workspace → 捕获 localhost:1455 callback
       → authorization code 换 token（本地 PKCE，不需要 CPA 服务）
@@ -33,10 +33,12 @@ import requests
 
 from . import netproxy, oauth_flow, sitepool as sitepool_mod
 from .mailbox.base import Inbox
+from .miaoic import MiaoicSmsClient
 from .paths import data_dir
 from .settings import Config
+from .shortcode import ShortCodeSmsClient
 from .sitepool import SitePoolSmsClient
-from .sms import SmsClient, SmsError
+from .sms import ApiCCSmsClient, FiveSimClient, SmsClient, SmsError
 from .stopflag import StopRequested, check_stop
 from .store import AccountRecord
 
@@ -210,6 +212,10 @@ def run_desktop_activation(
 
     try:
         sitepool_mode = str(config.sms_provider or "").strip().lower() == "sitepool"
+        miaoic_mode = str(config.sms_provider or "").strip().lower() == "miaoic"
+        shortcode_mode = str(config.sms_provider or "").strip().lower() == "shortcode"
+        fivesim_mode = str(config.sms_provider or "").strip().lower() == "fivesim"
+        apicc_mode = str(config.sms_provider or "").strip().lower() == "apicc"
         if sitepool_mode:
             # 站内只有一把「工具密钥」，邮箱和号码共用 —— /v1/pool/* 整组是同一个
             # 中间件、同一套身份解析（handler.identity() 都从 API Key 取用户），
@@ -223,9 +229,15 @@ def run_desktop_activation(
         else:
             sms_key = str(config.sms_api_key or "").strip()
 
-        if config.enable_activation and sms_key:
+        if config.enable_activation and (sms_key or shortcode_mode):
             try:
-                if sitepool_mode:
+                if shortcode_mode:
+                    # 「短效接码」token 页：凭证是那条链接本身，没有 API Key
+                    # （一个 token 一个号、换号次数有限 ⇒ 默认复用它已有的号码）
+                    sms_client = ShortCodeSmsClient(
+                        str(config.shortcode_url or "").strip(),
+                    )
+                elif sitepool_mode:
                     base = str(config.sitepool_base or sitepool_mod.DEFAULT_BASE_URL or "").strip()
                     if not base:
                         raise RuntimeError(
@@ -238,13 +250,41 @@ def run_desktop_activation(
                         sku=config.sitepool_phone_sku,
                     )
                 else:
-                    sms_client = SmsClient(
-                        config.sms_provider,
-                        sms_key,
-                        service=config.sms_service,
-                        country=config.sms_country,
-                        max_price=config.sms_max_price,
-                    )
+                    # miaoic 不是 SMS-Activate handler API：它没有 service/country/maxPrice，
+                    # 也没有 activation_id（一个 Token 同时只持有一个号码）。
+                    # 所以不能塞给 SmsClient，走它自己的客户端。
+                    if miaoic_mode:
+                        sms_client = MiaoicSmsClient(
+                            sms_key,
+                            base_url=str(config.miaoic_base or "").strip(),
+                        )
+                    elif fivesim_mode:
+                        # 5SIM 是另一套 API（Bearer + REST），不能用 SmsClient
+                        sms_client = FiveSimClient(
+                            sms_key,
+                            country=str(config.fivesim_country or "indonesia"),
+                            operator=str(config.fivesim_operator or "any"),
+                            product=str(config.fivesim_product or "openai"),
+                        )
+                    elif apicc_mode:
+                        # api.cc 长效卡号：裸 token + REST；**不可退**（cancel 只记日志），
+                        # 所以号段（prefixes）是唯一的质量手段。
+                        sms_client = ApiCCSmsClient(
+                            sms_key,
+                            app_id=int(config.apicc_app_id or 912),
+                            prefixes=str(config.apicc_prefixes or ""),
+                            expiry=int(config.apicc_expiry or 0),
+                            # 空 = 正常买新号；填了号 = 复用实验（不花钱）
+                            pin_numbers=str(getattr(config, "apicc_pin_numbers", "") or ""),
+                        )
+                    else:
+                        sms_client = SmsClient(
+                            config.sms_provider,
+                            sms_key,
+                            service=config.sms_service,
+                            country=config.sms_country,
+                            max_price=config.sms_max_price,
+                        )
             except SmsError as exc:
                 logger.warning("[激活] 接码平台初始化失败：%s", exc)
                 sms_client = None
@@ -255,7 +295,7 @@ def run_desktop_activation(
             timeout: int | None = None,
             **_kwargs,
         ) -> str:
-            # 授权页要的是同一个 Remail 订单的最新验证码。
+            # 授权页要的是同一张邮箱订单的最新验证码。
             # ★ timeout 必须允许调用方覆盖（2026-10-04）：写死 config.otp_timeout(180s)
             #   时，`_wait_for_fresh_email_otp(timeout=90)` 的 90s 完全不起作用，
             #   日志里表现成「外层以为等 90s、实际干等 180s」。
@@ -287,12 +327,40 @@ def run_desktop_activation(
         check_stop()
 
         emit("activation", "正在处理手机号验证")
+
+        # ★ 半自动模式：把「请人手动过验证」做成一个回调传进去。
+        #   这样 oauth_flow 不用知道 config / 半自动开关的存在，默认行为一字不变。
+        def _human_waiter(reason: str) -> None:
+            from .registration import _wait_for_human  # 局部导入，避开循环依赖
+
+            _wait_for_human(
+                driver,
+                emit=emit,
+                config=config,
+                reason=reason,
+                # 这一阶段的「就绪」= 能认出手机号表单或验证码页，**不是**登录页
+                probe=lambda d: "ok" if (
+                    oauth_flow._has_strict_add_phone_form(d)
+                    or oauth_flow._is_phone_code_page(d)
+                ) else "challenge",
+                want=("ok",),
+            )
+
         oauth_flow._do_phone_verification_if_present(
             driver, sms_client,
             max_retries=max(1, int(config.sms_max_retries)),
             code_wait=max(30, int(config.sms_code_wait)),
+            human_waiter=_human_waiter if config.semi_auto else None,
         )
         check_stop()
+
+        # ★ 2026-10-17：把「本单用掉的那个手机号」落进账号记录。
+        #   原因：api.cc 的长效号不可退、有效期 ~22 天，若能复用就近乎零边际成本；
+        #   要验证「同一个号能不能吃第二单」就必须先有「号 ↔ 账号」的对应关系。
+        phone_used = str(getattr(driver, "_grl_phone_accepted", "") or "")
+        if phone_used and not record.phone:
+            record.phone = phone_used
+            logger.info("[激活] 本单手机号已记录进账号记录：%s", phone_used)
 
         emit("activation", "正在等待授权确认")
         callback_url = oauth_flow._finish_consent_workspace(driver)
