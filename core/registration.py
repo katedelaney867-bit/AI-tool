@@ -311,6 +311,69 @@ def _safe_url(driver) -> str:
         return "<已关闭>"
 
 
+def _dump_blank_page(driver, reason: str, browser_try: int) -> dict:
+    """判「页面没渲染出来 / 出口被拦」时把现场落盘（截图 + DOM 摘要 + 网络事件）。
+
+    ★ 2026-10-22：老板当场纠正了我的错误结论 ——「如果没走系统代理，连提交邮箱的页面
+      都加载不出来」，他说得对：日志里明明 `已填写邮箱并校验通过`、`已提交邮箱`，
+      说明页面是渲染过的，出口也通。**所以「空白页 = 没代理」是错的**。
+      与其继续猜，不如每次判空就把证据写下来：截图 + body 前 800 字 + 输入框/按钮计数 +
+      主文档 status + 最近 openai/chatgpt 的请求/响应（`_auth_network_events`）。
+      落盘位置：`logs/page_debug_<UTC时间戳>_try<N>.{json,png}`。
+    """
+    import datetime as _dt
+    from pathlib import Path as _Path
+
+    info: dict[str, Any] = {
+        "reason": reason,
+        "browser_try": browser_try,
+        "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "url": _safe_url(driver),
+    }
+    try:
+        info.update(driver.execute_script(r"""
+        const inputs = [...document.querySelectorAll('input')];
+        const buttons = [...document.querySelectorAll('button,[role="button"],a[role="button"]')];
+        const scripts = [...document.querySelectorAll('script[src]')];
+        return {
+          readyState: document.readyState,
+          title: document.title || '',
+          bodyText: (document.body ? (document.body.innerText || '') : '').slice(0, 800),
+          htmlLen: (document.documentElement ? document.documentElement.outerHTML.length : 0),
+          inputs: inputs.length,
+          inputDetail: inputs.slice(0, 8).map(el => ({
+            type: el.type || '', name: el.name || '', id: el.id || '',
+            placeholder: el.placeholder || '', visible: !!(el.offsetWidth || el.offsetHeight),
+          })),
+          buttons: buttons.length,
+          buttonTexts: buttons.slice(0, 10).map(el => String(el.innerText || '').slice(0, 40)),
+          scripts: scripts.length,
+          hasCfChallenge: !!document.querySelector('#challenge-form, .cf-challenge, [id*="cf-challenge"]'),
+        };
+        """) or {})
+    except Exception as exc:  # noqa: BLE001
+        info["dom_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        info["network"] = list(getattr(driver, "_auth_network_events", []) or [])[-20:]
+    except Exception:  # noqa: BLE001
+        pass
+
+    out_dir = _Path(__file__).resolve().parent.parent / "logs"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        base = out_dir / f"page_debug_{stamp}_try{browser_try}"
+        base.with_suffix(".json").write_text(
+            json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+        page = getattr(driver, "page", None)
+        if page is not None:
+            page.screenshot(path=str(base.with_suffix(".png")))
+        logger.warning("[注册] 已把「页面空/被拦」现场写盘：%s.json / .png", base)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[注册] 页面现场落盘失败：%s", str(exc)[:160])
+    return info
+
+
 def _email_step_fatal(exc: BaseException) -> bool:
     """邮箱这一步的失败，哪些是「换代理也没用」的。
 
@@ -601,10 +664,15 @@ def register_one(
                             except Exception:  # noqa: BLE001
                                 logger.warning("[注册] 半自动：人工处理后重试提交邮箱仍失败")
                     if browser_try < BROWSER_TRIES and retryable:
+                        dbg = _dump_blank_page(driver, "email_submit_stuck", browser_try)
                         logger.warning("[注册] 邮箱页不可用（URL=%s，原因=%s），"
-                                       "判定出口被拦，换连接重试 %s/%s",
+                                       "判定出口被拦，换连接重试 %s/%s；"
+                                       "现场速览 readyState=%s inputs=%s buttons=%s title=%r body=%r",
                                        _safe_url(driver), str(exc)[:60],
-                                       browser_try, BROWSER_TRIES)
+                                       browser_try, BROWSER_TRIES,
+                                       dbg.get("readyState"), dbg.get("inputs"),
+                                       dbg.get("buttons"), str(dbg.get("title"))[:60],
+                                       str(dbg.get("bodyText"))[:120])
                         emit("navigate",
                              f"页面没渲染出来，换一条连接重试（{browser_try}/{BROWSER_TRIES}）")
                         try:
@@ -616,8 +684,13 @@ def register_one(
                         continue
                     raise
 
-            logger.warning("[注册] 登录页不可用（%s，URL=%s），换连接重试 %s/%s",
-                           verdict, _safe_url(driver), browser_try, BROWSER_TRIES)
+            dbg = _dump_blank_page(driver, f"login_page_{verdict}", browser_try)
+            logger.warning("[注册] 登录页不可用（%s，URL=%s），换连接重试 %s/%s；"
+                           "现场速览 readyState=%s inputs=%s buttons=%s cf=%s title=%r body=%r",
+                           verdict, _safe_url(driver), browser_try, BROWSER_TRIES,
+                           dbg.get("readyState"), dbg.get("inputs"), dbg.get("buttons"),
+                           dbg.get("hasCfChallenge"), str(dbg.get("title"))[:60],
+                           str(dbg.get("bodyText"))[:120])
             emit("navigate",
                  f"{'出口被 Cloudflare 拦了' if verdict == 'challenge' else '页面没渲染出来'}，"
                  f"换一条连接重试（{browser_try}/{BROWSER_TRIES}）")

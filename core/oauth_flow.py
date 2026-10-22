@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import threading
 import time
@@ -1462,6 +1463,39 @@ def _tally_attempts(notes: list[tuple[str, str]]) -> list[tuple[str, str, int]]:
             sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
+def _phone_required_error_visible(driver) -> bool:
+    """add-phone 页是否出现了**真正的**「号码必填」报错。
+
+    ★ 2026-10-21 教训（我先踩了一次）：这个页面的**标题和副标题**本身就是
+      「Phone number required / Add your phone number to continue…」，
+      拿 `body.innerText` 匹配会**永远为真**（一上线就把激活直接判死）。
+      只能看**报错容器**：role=alert / aria-live / React-Aria 的 field error 节点。
+    """
+    try:
+        return bool(driver.execute_script(r"""
+        const nodes = [
+          ...document.querySelectorAll('[role="alert"], [aria-live="assertive"], [aria-live="polite"]'),
+        ];
+        const form = document.querySelector('form[action*="/add-phone" i]');
+        if (form) {
+          for (const el of form.querySelectorAll('[class*="error" i], [id*="error" i], [data-invalid="true"]')) {
+            nodes.push(el);
+          }
+        }
+        const norm = t => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        for (const el of nodes) {
+          if (!el) continue;
+          const t = norm(el.innerText || el.textContent);
+          if (!t) continue;
+          if (t.includes('phone number required') || t.includes('需要电话号码')) return true;
+          if (t.includes('required') && t.includes('phone')) return true;
+        }
+        return false;
+        """))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _page_selected_dial(driver) -> str:
     """读 add-phone 国家选择器当前选中项的区号（从 option 文本的 (+NN) 里取）。"""
     try:
@@ -1513,18 +1547,34 @@ def _type_phone_with_keyboard(driver, info: dict) -> dict:
     )
     box.click()
     time.sleep(0.2)
+    # ★ 2026-10-21：这个表单里 React 真正读的是**当前获焦的那个输入框**
+    #   （点下去之后焦点可能落在可见的 `<input type="text">` 上，而不是 tel 面具框）。
+    #   所以先按元素清空，再往「当前焦点元素」逐位打 —— 往写死的元素打，页面可能收不到。
     box.send_keys(Keys.CONTROL, "a")
     box.send_keys(Keys.DELETE)
     time.sleep(0.2)
+    try:
+        target = driver.switch_to.active_element or box
+    except Exception:  # noqa: BLE001
+        target = box
     # 一位一位打，中间留一点间隔：React-Aria 的格式化逻辑会在每次 input 后重排，
     # 一次性 send_keys 太快反而容易被它吃掉字符。
     for ch in digits:
-        box.send_keys(ch)
+        target.send_keys(ch)
         time.sleep(random.uniform(0.03, 0.09))
     time.sleep(0.4)
     actual = str(box.get_attribute("value") or "")
+    try:
+        typed_into = target.get_attribute("outerHTML") or ""
+    except Exception:  # noqa: BLE001
+        typed_into = ""
     box.send_keys(Keys.TAB)  # 移开焦点，让页面完成校验
-    return {"mode": "keyboard", "expected": digits, "actual": actual}
+    return {
+        "mode": "keyboard",
+        "expected": digits,
+        "actual": actual,
+        "target": typed_into[:160],
+    }
 
 
 def _set_phone_value(driver, phone: str, *, timeout: int = 10, keyboard: bool = False) -> dict:
@@ -1684,6 +1734,18 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10, keyboard: bool = 
     if (hiddenPhoneNumberInput) {
       setNativeValue(hiddenPhoneNumberInput, e164);
     }
+    // ★ 2026-10-21 现场实证（phone_debug.json）：这个表单里还有**可见的受控
+    //   `<input type="text">`（无 name）**，React 真正读的是它；只写
+    //   `__reservedForPhoneNumberInput_tel` + hidden `phoneNumber` 时，页面一直停在
+    //   「Phone number required」，Continue 点了等于没点 —— 也就是老板看到的
+    //   「号码页不填号却一直点继续」。把空着的可见 text 框一并写上。
+    const textInputs = [...form.querySelectorAll('input[type="text"]')].filter(visible);
+    for (const el of textInputs) {
+      const cur = String(el.value || '').trim();
+      if (!cur || /^[+\d\s()-]+$/.test(cur)) {
+        try { setNativeValue(el, e164); } catch (e) { /* 某个框不让写就算了 */ }
+      }
+    }
     phoneInput.blur();
     document.body?.focus?.();
     return {
@@ -1692,6 +1754,7 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10, keyboard: bool = 
       visibleValue,
       actualVisible: phoneInput.value || '',
       hiddenValue: hiddenPhoneNumberInput ? (hiddenPhoneNumberInput.value || '') : '',
+      textValues: textInputs.map(el => String(el.value || '')),
       dialCode,
       selectedText,
       selectedAfter,
@@ -2415,7 +2478,28 @@ def _do_phone_verification_if_present(
                         phone_fill.get("e164"), phone_fill.get("visibleValue"), country_after)
             _blur_active_input_and_wait(driver, label="手机号输入完成")
             _verify_add_phone_value_before_submit(driver, str(phone_fill.get("e164") or f"+{phone}"))
+            # ★ 2026-10-21 现场实证：提交前页面若仍显示「Phone number required」，
+            #   说明 React 的受控输入还是空的（号码只进了 tel 面具框和 hidden 框）。
+            #   这时点 Continue 等于空点 —— 就是老板看到的「号码页不填号一直点继续」。
+            #   先用真实键盘在当前焦点重打一遍，仍不行就明确报错（别再把 5 个号烧光）。
+            if _phone_required_error_visible(driver):
+                logger.warning("[激活] 提交前页面仍报「Phone number required」，改用页面级真实键盘重打号码")
+                try:
+                    _type_phone_with_keyboard(driver, phone_fill if isinstance(phone_fill, dict) else {"e164": f"+{phone}"})
+                except Exception as kb_exc:  # noqa: BLE001
+                    logger.warning("[激活] 键盘重打号码失败：%s", str(kb_exc)[:160])
+                _blur_active_input_and_wait(driver, label="键盘重打手机号")
+            if _phone_required_error_visible(driver):
+                if os.environ.get("GRL_PHONE_TRACE", "").strip() not in ("", "0"):
+                    _dump_phone_debug(driver, _phone_page_state(driver), "phone_required_after_fill")
+                raise RuntimeError(
+                    "phone_number_required: 号码写不进页面受控输入（页面仍要求填号码）。"
+                    "这不是号码被拒，先别换号 —— 换了也是同一个坑。 "
+                    f"fill={phone_fill}"
+                )
             logger.info("[激活] 手机号提交前校验通过")
+            if os.environ.get("GRL_PHONE_TRACE", "").strip() not in ("", "0"):
+                _dump_phone_debug(driver, _phone_page_state(driver), "before_submit")
             _click_add_phone_continue_button(driver, timeout=10)
             _wait_page_settle_after_submit()
 
@@ -2498,6 +2582,14 @@ def _do_phone_verification_if_present(
             if "invalid_auth_step" in err_text:
                 raise RuntimeError(
                     "手机号流程进入 invalid_auth_step，授权状态未正常跳转，已停止继续换号"
+                ) from exc
+            # ★ 2026-10-21：号码根本写不进页面受控输入 —— 换号也是同一个坑，
+            #   一轮 5 个号全白烧（现场：号码页一直空着、Continue 被反复点）。
+            #   立刻停，别再买号。
+            if "phone_number_required" in err_text:
+                raise RuntimeError(
+                    "phone_number_required: 号码写不进页面受控输入（页面仍报「Phone number required」），"
+                    "已停止本单激活，不再换号白烧。本次号码：" + (phone or "?")
                 ) from exc
             # ★★ 账号/会话级失效：**立刻停**，别再买号（2026-10-16 老板实测）：
             #   账号已封时页面写 "Session ended … no longer valid"，OTP 提交那步

@@ -426,14 +426,27 @@ def build_cloak_driver(
 ) -> tuple[CloakSeleniumDriver, CloakOpenResult]:
     """启动 CloakBrowser，返回 Selenium 风格 driver。
 
-    proxy="" 或 None 表示不走代理（直接用本机出口）。
+    proxy 为空时**自动退回系统代理**（Clash/FlClash 的「系统代理」或 PAC），
+    只有系统里也读不到代理才真正直连。
+
+    ★ 2026-10-22 事故：这里以前是 `proxy or "" → None`，于是「设置里没填代理」= 浏览器
+      **直连**。国内直连 chatgpt.com 根本不通（实测 20 秒无响应，走 127.0.0.1:7890 只要
+      1.5 秒），浏览器只能拿到空白页 —— 老板看到的「页面一直渲染不出来」，工具自己判成
+      「出口被拦，换连接重试 2/8、3/8…」，换多少次都一样。
+      号池的 HTTP 客户端早就走 `netproxy.resolve()` 了，唯独浏览器这条路漏了。
     """
     try:
         from cloakbrowser import launch
     except ImportError as exc:
         raise RuntimeError("未安装 cloakbrowser，请执行：pip install \"cloakbrowser[geoip]\"") from exc
 
-    proxy_url = str(proxy or "").strip().replace("socks5h://", "socks5://") or None
+    from . import netproxy
+
+    explicit = str(proxy or "").strip()
+    resolved = netproxy.resolve(explicit)
+    proxy_url = resolved.replace("socks5h://", "socks5://") or None
+    if proxy_url and not explicit:
+        logger.info("[Cloak] 设置里没填代理，自动使用系统代理 %s", proxy_url)
     options: dict[str, Any] = {
         "headless": bool(headless),
         "humanize": bool(humanize),
