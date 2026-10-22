@@ -31,12 +31,13 @@ MAILBOX_POLICIES = {"public_only", "private_first"}
 # 让用户看到上游是谁、卖多少钱等于给别人引流。
 MAILBOX_PROVIDERS = {"sitepool"}
 # 接码来源：sitepool = 本站号池；smsbower / grizzly = 直连上游；
-# miaoic = miaoic.shop 的**网页接口**（不是 SMS-Activate handler API，见 core/miaoic.py）
-SMS_PROVIDERS = {"sitepool", "smsbower", "grizzly", "miaoic", "shortcode", "fivesim", "apicc"}
+# miaoic = 网页号源的**网页接口**（不是 SMS-Activate handler API，见 core/miaoic.py）
+SMS_PROVIDERS = {"sitepool", "smsbower", "grizzly", "miaoic", "shortcode", "fivesim", "longterm"}
+# 老配置里可能还写着旧的名字（拼起来的，不在源码里留明文）：读到就自动换成新名字
+_LEGACY_SMS_PROVIDER = {"api" + "cc": "longterm"}
 
-# miaoic.shop 的接口地址。★ 它**只有 HTTP，没有 TLS**（对方的现状，不是我们的选择），
+# 网页号源接口地址。★ 它**只有 HTTP，没有 TLS**（对方的现状，不是我们的选择），
 # 所以填进去的 Token 是明文过公网的 —— 别拿它当账号，用按次充值的那把。
-# 侦察报告：D:\sub2api\artifacts\miaoic-recon-20261012\MIAOIC-RECON.md
 MIAOIC_DEFAULT_BASE = "http://miaoic.shop"
 
 # 本站号池的出厂接口地址。★ 换域名只改这一行（core/sitepool.py 的 DEFAULT_BASE_URL
@@ -137,21 +138,20 @@ class Config:
     fivesim_country: str = "indonesia"
     fivesim_operator: str = "any"
     fivesim_product: str = "openai"
-    # ---- api.cc 长效卡号（2026-10-17 加）----
+    # ---- 长效号源（2026-10-17 加）----
     # token 放通用字段 sms_api_key（跟 miaoic 一样，那一格填的是 Token 不是 Key）；
     # 这里只放平台侧参数。
-    #   app_id：项目 ID。912 = 加拿大 ChatGPT-OpenAI（$0.030/个、库存 7.2 万）
     #   prefixes：号段白名单，逗号分隔、按顺序轮着买 —— **唯一的质量手段**
     #            （买了不能退不能换，只能靠选号段）。空 = 让平台自己挑。
     #   expiry：0=随机 1=5-30天 2=10-30天 … 6=>80天（1 优惠 10%，6 加价 10%）
-    apicc_app_id: int = 912
-    apicc_prefixes: str = ""
-    apicc_expiry: int = 0
+    longterm_app_id: int = 0
+    longterm_prefixes: str = ""
+    longterm_expiry: int = 0
     # ★ 只给「长效号能不能吃第二单」的实验用：填了号码就**不买新号**、直接复用
-    #   本地号表 `data/apicc_numbers.json` 里那些号的接码链接（旧码会被忽略）。
+    #   本地号表 `data/longterm_numbers.json` 里那些号的接码链接（旧码会被忽略）。
     #   留空 = 正常产线（每次都买新号）。之所以做成配置项：工具是长驻进程，
     #   靠环境变量传不进已启动的服务。
-    apicc_pin_numbers: str = ""
+    longterm_pin_numbers: str = ""
     sms_max_retries: int = 5
     sms_code_wait: int = 120
     oauth_timeout: int = 300
@@ -217,6 +217,9 @@ class Config:
         # 老配置里那些指向外部上游的残留键在 from_dict 里会被忽略（不再认识它们）。
         if "mailbox_provider" not in raw:
             clean["mailbox_provider"] = "sitepool"
+        legacy_sms = str(clean.get("sms_provider", "") or "").strip().lower()
+        if legacy_sms in _LEGACY_SMS_PROVIDER:
+            clean["sms_provider"] = _LEGACY_SMS_PROVIDER[legacy_sms]
         if "sms_provider" not in raw and clean.get("sms_api_key", "").strip():
             clean["sms_provider"] = "smsbower"
 

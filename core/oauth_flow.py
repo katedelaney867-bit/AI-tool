@@ -2520,7 +2520,6 @@ def _do_phone_verification_if_present(
             # ★ 2026-10-06：still_code_page 表示「点过提交，但页面既没前进、也没有任何
             #   错误文案」。以前这里不管结果一律 continue，于是这一轮注定在 callback
             #   处超时 5 分钟，而且日志里**看不出**是「号被 OpenAI 拒了」还是「提交没生效」。
-            #   （实测：同一张 gsm888 卡第 2 次接码就停在这里，无法判定。）
             #   邮箱 OTP 那条路早就用「强制同步 + 重试」治过同一个毛病，这里照做。
             submit_retries = 0
             while outcome == "still_code_page" and submit_retries < PHONE_OTP_SUBMIT_RETRIES:
@@ -2553,7 +2552,7 @@ def _do_phone_verification_if_present(
                 )
             logger.info("[激活] 手机 OTP 提交后状态：%s", outcome)
             # ★ 2026-10-17：把「这一单真正吃下的号」挂到 driver 上，由调用方写进账号记录。
-            #   长效号（api.cc）不可退但**有效期 22 天**，能不能复用同一个号吃第二单，
+            #   长效号（长效号源）不可退但**有效期 22 天**，能不能复用同一个号吃第二单，
             #   是它成本能否压到近零的关键 —— 没有这个字段就永远统计不了。
             try:
                 setattr(driver, "_grl_phone_accepted", phone)

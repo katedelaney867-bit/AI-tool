@@ -16,6 +16,7 @@ SMSBower 和 GrizzlySMS 都用 SMS-Activate 兼容的 handler API，一套代码
 from __future__ import annotations
 
 import json
+import os
 import logging
 import threading
 import time
@@ -333,7 +334,7 @@ class FiveSimClient:
         ★★ 2026-10-17 补（真事故）：流程里会调 `sms_client.set_status(id, 1)`
         （"号码已就绪"），这是照 SMS-Activate 写的。缺了它，整轮手机验证会在
         **刚买完号**之后当场抛 `AttributeError` —— 5SIM 的号还能退，
-        api.cc 的长效号就直接作废（不可退），一次白扔 3 个号。
+        长效号源的长效号就直接作废（不可退），一次白扔 3 个号。
         """
         logger.debug("[SMS:%s] set_status(%s) 无对应动作，忽略", self.label, status)
         return ""
@@ -354,23 +355,25 @@ class FiveSimClient:
 
 
 # ---------------------------------------------------------------------------
-# api.cc：长效卡号（加拿大），**买了不能退不能换**，所以只按号段买最少数量
+# 长效号源：长效卡号（北美），**买了不能退不能换**，所以只按号段买最少数量
 # ---------------------------------------------------------------------------
 
-APICC_BASE = "https://api.cc"
-_APICC_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+# 长效号源接口地址：**不在源码里硬编码**，用环境变量 GRL_LONGTERM_BASE 配置；
+# 没配就让这个号源不可用（报明确错误），而不是把钱烧在一个写死的地址上。
+LONGTERM_BASE = os.environ.get("GRL_LONGTERM_BASE", "").strip()
+_LONGTERM_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-# 号段轮换的持久化游标（跨进程、跨单）。见 ApiCCSmsClient._pick_prefix 的注释。
-_APICC_ROTATE_FILE = Path(__file__).resolve().parent.parent / "data" / "apicc_prefix_rotate.json"
+# 号段轮换的持久化游标（跨进程、跨单）。见 LongTermSmsClient._pick_prefix 的注释。
+_LONGTERM_ROTATE_FILE = Path(__file__).resolve().parent.parent / "data" / "longterm_prefix_rotate.json"
 
 
-def _apicc_next_index(count: int) -> int:
+def _longterm_next_index(count: int) -> int:
     """读出「下一个该用第几个号段」并推进一格；任何异常都退回 0。
 
     写失败不影响取号 —— 轮换只是**采样手段**，不该因为它挂掉整个激活流程。
     """
     total = max(1, int(count))
-    path = _APICC_ROTATE_FILE
+    path = _LONGTERM_ROTATE_FILE
     index = 0
     try:
         if path.exists():
@@ -383,41 +386,41 @@ def _apicc_next_index(count: int) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"next": (index + 1) % total}), encoding="utf-8")
     except Exception:  # noqa: BLE001
-        logger.debug("[SMS:api.cc] 号段轮换游标写不进去（不影响取号）")
+        logger.debug("[SMS:长效] 号段轮换游标写不进去（不影响取号）")
     return index
 
 
 # 本地号表：号码 → 接码链接（买的号只在下单响应里给一次链接，进程重启就丢）。
 # 有了它才能「复用旧号」以及事后按号段算真实成本。
-_APICC_NUMBERS_FILE = Path(__file__).resolve().parent.parent / "data" / "apicc_numbers.json"
+_LONGTERM_NUMBERS_FILE = Path(__file__).resolve().parent.parent / "data" / "longterm_numbers.json"
 
 
-def _apicc_load_numbers() -> dict:
+def _longterm_load_numbers() -> dict:
     try:
-        if _APICC_NUMBERS_FILE.exists():
+        if _LONGTERM_NUMBERS_FILE.exists():
             # ★ 用 utf-8-sig：PowerShell 5.1 的 `Set-Content -Encoding utf8` 会带 BOM，
             #   而 json.loads 遇到 BOM 直接抛 ⇒ 整张号表被当成空表，
             #   复用号永远找不到接码链接（2026-10-17 实测踩了一次）。
-            raw = json.loads(_APICC_NUMBERS_FILE.read_text(encoding="utf-8-sig"))
+            raw = json.loads(_LONGTERM_NUMBERS_FILE.read_text(encoding="utf-8-sig"))
             if isinstance(raw, dict):
                 return raw
     except Exception:  # noqa: BLE001
-        logger.debug("[SMS:api.cc] 本地号表读不出来，按空表处理")
+        logger.debug("[SMS:长效] 本地号表读不出来，按空表处理")
     return {}
 
 
-def _apicc_save_numbers(book: dict) -> None:
+def _longterm_save_numbers(book: dict) -> None:
     try:
-        _APICC_NUMBERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _APICC_NUMBERS_FILE.write_text(
+        _LONGTERM_NUMBERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LONGTERM_NUMBERS_FILE.write_text(
             json.dumps(book, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     except Exception:  # noqa: BLE001
-        logger.debug("[SMS:api.cc] 本地号表写不进去（不影响取号）")
+        logger.debug("[SMS:长效] 本地号表写不进去（不影响取号）")
 
 
-class ApiCCSmsClient:
-    """api.cc 长效号码（加拿大 ChatGPT-OpenAI 项目，app_id=912）。
+class LongTermSmsClient:
+    """长效号码（项目 ID 需在设置里自己填，默认 0 = 未配置）。
 
     2026-10-17 拿老板的 token 实测通过的协议：
 
@@ -437,13 +440,13 @@ class ApiCCSmsClient:
     ★ 限速：buy/create 每用户 10 次/60s；超限 429 且封 120 秒。
     """
 
-    label = "api.cc"
+    label = "长效号码"
 
     def __init__(
         self,
         api_key: str,
         *,
-        app_id: int = 912,
+        app_id: int = 0,
         prefixes: str = "",
         expiry: int = 0,
         pin_numbers: str = "",
@@ -452,7 +455,7 @@ class ApiCCSmsClient:
         self.api_key = str(api_key or "").strip()
         if not self.api_key:
             raise SmsError(f"{self.label} API Token 未填写")
-        self.app_id = int(app_id or 912)
+        self.app_id = int(app_id or 0)
         self.prefixes = [p.strip() for p in str(prefixes or "").replace(" ", "").split(",") if p.strip()]
         self.expiry = int(expiry or 0)
         self.timeout = max(10, int(timeout))
@@ -469,15 +472,19 @@ class ApiCCSmsClient:
     # ------------------------------------------------------------- HTTP
 
     def _call(self, path: str, body: dict | None = None) -> dict:
+        if not LONGTERM_BASE:
+            raise SmsError(
+                f"{self.label} 接口地址未配置：请设置环境变量 GRL_LONGTERM_BASE（本程序不内置上游地址）"
+            )
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(
-            APICC_BASE + path,
+            LONGTERM_BASE + path,
             data=data,
             method="POST" if body is not None else "GET",
             headers={
                 "Authorization": self.api_key,   # ★ 裸 token，不加 Bearer
                 "Content-Type": "application/json",
-                "User-Agent": _APICC_UA,
+                "User-Agent": _LONGTERM_UA,
                 "Accept": "application/json",
             },
         )
@@ -500,13 +507,13 @@ class ApiCCSmsClient:
         """按配置顺序轮着用号段（每买一个换下一个）。空 = 让平台自己挑。
 
         ★★ 2026-10-17 修：轮换状态必须**跨进程**。
-          `ApiCCSmsClient` 是每次激活新建一个实例，实例里的 `_rotate` 每单都从 0
+          `LongTermSmsClient` 是每次激活新建一个实例，实例里的 `_rotate` 每单都从 0
           开始 ⇒ 配了 3 个号段也永远只用第一个（实测连开两单全是 1236，另外两个
           一个样本都拿不到）。号段是长效号**唯一**的质量手段，必须让它轮起来。
         """
         if not self.prefixes:
             return ""
-        prefix = self.prefixes[_apicc_next_index(len(self.prefixes))]
+        prefix = self.prefixes[_longterm_next_index(len(self.prefixes))]
         return prefix
 
     # ---------------------------------------------------------- 取号/收码
@@ -514,7 +521,7 @@ class ApiCCSmsClient:
     def _fetch_record_once(self, record_url: str) -> dict:
         """读一次接码链接，失败返回 {}（复用号取基线、以及 wait_code 都用它）。"""
         url = record_url + ("&" if "?" in record_url else "?") + "format=json3"
-        req = urllib.request.Request(url, headers={"User-Agent": _APICC_UA})
+        req = urllib.request.Request(url, headers={"User-Agent": _LONGTERM_UA})
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 payload = json.loads(resp.read().decode("utf-8", "replace"))
@@ -535,11 +542,11 @@ class ApiCCSmsClient:
         """
         if not self.pin_numbers:
             return None
-        book = _apicc_load_numbers()
+        book = _longterm_load_numbers()
         usable = [n for n in self.pin_numbers if str((book.get(n) or {}).get("api") or "")]
         if not usable:
             logger.warning(
-                "[SMS:api.cc] 指定复用号在本地号表里没有接码链接（%s），改为现买",
+                "[SMS:长效] 指定复用号在本地号表里没有接码链接（%s），改为现买",
                 ",".join(self.pin_numbers),
             )
             return None
@@ -548,7 +555,7 @@ class ApiCCSmsClient:
         entry = book[tel]
         entry["pinned_attempts"] = int(entry.get("pinned_attempts") or 0) + 1
         entry["last_pinned_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        _apicc_save_numbers(book)
+        _longterm_save_numbers(book)
         record_url = str(entry.get("api") or "")
         baseline = self._fetch_record_once(record_url)
         order_id = f"pin-{tel}"
@@ -558,7 +565,7 @@ class ApiCCSmsClient:
             str(baseline.get("sms") or ""), str(baseline.get("sms_time") or "")
         )
         logger.warning(
-            "[SMS:api.cc] 复用旧号（本次不买号、不花钱）：%s 号段=%s 第 %s 次复用；"
+            "[SMS:长效] 复用旧号（本次不买号、不花钱）：%s 号段=%s 第 %s 次复用；"
             "已记录旧码基线=%r（等同旧码会继续等）",
             tel, tel[:4], entry["pinned_attempts"], self._baseline[order_id][0][:40],
         )
@@ -566,7 +573,7 @@ class ApiCCSmsClient:
 
     def _remember(self, phone: str, record_url: str, item: dict) -> None:
         """把买到的号落进本地号表（复用、算成本都靠它）。"""
-        book = _apicc_load_numbers()
+        book = _longterm_load_numbers()
         book[phone] = {
             "api": record_url,
             "prefix": phone[:4],
@@ -575,7 +582,7 @@ class ApiCCSmsClient:
             "bought_price_usd": 0.027 if self.expiry == 1 else 0.030,
             "pinned_attempts": int((book.get(phone) or {}).get("pinned_attempts") or 0),
         }
-        _apicc_save_numbers(book)
+        _longterm_save_numbers(book)
 
     def _recover_lost_purchase(self) -> tuple[str, str] | None:
         """下单响应在网络上丢了（SSL EOF 之类），去订单列表把那个号找回来。
@@ -613,14 +620,14 @@ class ApiCCSmsClient:
                 url = str(item.get("api") or "").strip()
                 if not tel or not url:
                     continue
-                if tel in _apicc_load_numbers():
+                if tel in _longterm_load_numbers():
                     continue      # 已经在我们表里 = 早就处理过
                 self._remember(tel, url, item)
                 order_id = str(item.get("token") or "") or tel
                 self._record_urls[order_id] = url
                 self._prefix_of[order_id] = tel[:4]
                 logger.warning(
-                    "[SMS:api.cc] 下单响应丢了，但从订单 %s 里把号捡回来了：%s 号段=%s",
+                    "[SMS:长效] 下单响应丢了，但从订单 %s 里把号捡回来了：%s 号段=%s",
                     ordnum, tel, tel[:4],
                 )
                 return order_id, tel
@@ -703,7 +710,7 @@ class ApiCCSmsClient:
                 raise SmsError("用户已请求停止")
             rounds += 1
             url = record_url + ("&" if "?" in record_url else "?") + "format=json3"
-            req = urllib.request.Request(url, headers={"User-Agent": _APICC_UA})
+            req = urllib.request.Request(url, headers={"User-Agent": _LONGTERM_UA})
             try:
                 with urllib.request.urlopen(req, timeout=20) as resp:
                     payload = json.loads(resp.read().decode("utf-8", "replace"))
@@ -731,7 +738,7 @@ class ApiCCSmsClient:
     # ------------------------------------------------------------- 状态
 
     def set_status(self, activation_id: str, status: int) -> str:
-        """api.cc 没有 SMS-Activate 那套 setStatus —— 占位、什么都不做。
+        """长效号源没有 setStatus 那套接口 —— 占位、什么都不做。
 
         ★★ 2026-10-17 真事故：第一版漏了这个方法，流程在"号码已就绪"那步
         当场抛 `AttributeError`，而长效号**不可退** ⇒ 一次白扔 3 个号（$0.09）。

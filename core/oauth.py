@@ -38,7 +38,7 @@ from .paths import data_dir
 from .settings import Config
 from .shortcode import ShortCodeSmsClient
 from .sitepool import SitePoolSmsClient
-from .sms import ApiCCSmsClient, FiveSimClient, SmsClient, SmsError
+from .sms import LongTermSmsClient, FiveSimClient, SmsClient, SmsError
 from .stopflag import StopRequested, check_stop
 from .store import AccountRecord
 
@@ -215,7 +215,7 @@ def run_desktop_activation(
         miaoic_mode = str(config.sms_provider or "").strip().lower() == "miaoic"
         shortcode_mode = str(config.sms_provider or "").strip().lower() == "shortcode"
         fivesim_mode = str(config.sms_provider or "").strip().lower() == "fivesim"
-        apicc_mode = str(config.sms_provider or "").strip().lower() == "apicc"
+        longterm_mode = str(config.sms_provider or "").strip().lower() == "longterm"
         if sitepool_mode:
             # 站内只有一把「工具密钥」，邮箱和号码共用 —— /v1/pool/* 整组是同一个
             # 中间件、同一套身份解析（handler.identity() 都从 API Key 取用户），
@@ -266,16 +266,16 @@ def run_desktop_activation(
                             operator=str(config.fivesim_operator or "any"),
                             product=str(config.fivesim_product or "openai"),
                         )
-                    elif apicc_mode:
-                        # api.cc 长效卡号：裸 token + REST；**不可退**（cancel 只记日志），
+                    elif longterm_mode:
+                        # 长效号源：裸 token + REST；**不可退**（cancel 只记日志），
                         # 所以号段（prefixes）是唯一的质量手段。
-                        sms_client = ApiCCSmsClient(
+                        sms_client = LongTermSmsClient(
                             sms_key,
-                            app_id=int(config.apicc_app_id or 912),
-                            prefixes=str(config.apicc_prefixes or ""),
-                            expiry=int(config.apicc_expiry or 0),
+                            app_id=int(config.longterm_app_id or 0),
+                            prefixes=str(config.longterm_prefixes or ""),
+                            expiry=int(config.longterm_expiry or 0),
                             # 空 = 正常买新号；填了号 = 复用实验（不花钱）
-                            pin_numbers=str(getattr(config, "apicc_pin_numbers", "") or ""),
+                            pin_numbers=str(getattr(config, "longterm_pin_numbers", "") or ""),
                         )
                     else:
                         sms_client = SmsClient(
@@ -355,7 +355,7 @@ def run_desktop_activation(
         check_stop()
 
         # ★ 2026-10-17：把「本单用掉的那个手机号」落进账号记录。
-        #   原因：api.cc 的长效号不可退、有效期 ~22 天，若能复用就近乎零边际成本；
+        #   原因：长效号源的长效号不可退、有效期 ~22 天，若能复用就近乎零边际成本；
         #   要验证「同一个号能不能吃第二单」就必须先有「号 ↔ 账号」的对应关系。
         phone_used = str(getattr(driver, "_grl_phone_accepted", "") or "")
         if phone_used and not record.phone:
