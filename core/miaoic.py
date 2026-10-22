@@ -2,7 +2,7 @@
 """miaoic.shop 接码客户端。
 
 站点**没有公开 API** —— 这里用的是它自己的网页接口（``/recv/*``），身份是 cookie
-``bj_user``。侦察与风险说明见 ``artifacts/miaoic-recon-20261012/MIAOIC-RECON.md``。
+``bj_user``。
 
 与 SMSBower 那类 SMS-Activate handler API 的关键区别（会造成行为差异，务必记住）：
 

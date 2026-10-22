@@ -1853,7 +1853,7 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10, keyboard: bool = 
     #     5) JS 写本国号码（当时写进去了，2 秒后 React 重渲染又覆盖回 12 位）
     #     6) 清空后连 `+` 和区号逐位键盘输入（渐进识别跑飞：打成 +64 新西兰 / +86 中国）
     #   根因是页面侧格式化，不是我们的填写时机。详见
-    #   artifacts/account-pool-experiment-20261004/ 下的各国日志。
+    #   本地实验日志里各国号段的真实表现。
     #   换句话说：**这个国家的号码在这里根本测不出来**，不是「印尼被 OpenAI 拒」。
     raise RuntimeError(f"手机号写入校验失败：{last_reason} result={last_result} state={_phone_page_state(driver)}")
 
